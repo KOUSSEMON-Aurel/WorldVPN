@@ -1,0 +1,22 @@
+{
+    "manifest_version": 3,
+    "name": "WorldVPN Extension",
+    "version": "1.0",
+    "description": "Secure your browser with WorldVPN.",
+    "permissions": [
+        "storage",
+        "proxy",
+        "activeTab"
+    ],
+    "action": {
+        "default_popup": "index.html",
+        "default_icon": "icon.png"
+    },
+    "icons": {
+        "48": "icon-48.png",
+        "128": "icon-128.png"
+    },
+    "background": {
+        "service_worker": "background.js"
+    }
+}

@@ -82,7 +82,7 @@ impl BinaryManager {
         Ok(binary_path)
     }
 
-    fn get_platform_url(_spec: &BinarySpec) -> Result<String> {
+    fn get_platform_url(spec: &BinarySpec) -> Result<String> {
         #[cfg(target_os = "linux")]
         return Ok(spec.download_url_linux.clone());
 
@@ -185,6 +185,13 @@ pub fn get_binary_specs() -> Vec<BinarySpec> {
             download_url_linux: "https://github.com/v2fly/v2ray-core/releases/download/v5.13.0/v2ray-linux-64.zip".to_string(),
             download_url_macos: "https://github.com/v2fly/v2ray-core/releases/download/v5.13.0/v2ray-macos-64.zip".to_string(),
             download_url_windows: "https://github.com/v2fly/v2ray-core/releases/download/v5.13.0/v2ray-windows-64.zip".to_string(),
+        },
+        BinarySpec {
+            name: "wintun.dll".to_string(),
+            version: "0.14.1".to_string(),
+            download_url_linux: "none".to_string(),
+            download_url_macos: "none".to_string(),
+            download_url_windows: "https://www.wintun.net/builds/wintun-0.14.1.zip".to_string(),
         },
     ]
 }

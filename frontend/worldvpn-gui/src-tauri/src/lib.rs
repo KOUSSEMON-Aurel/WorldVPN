@@ -54,6 +54,19 @@ async fn connect_vpn(
     }
 
     // 2. Platform Specific logic
+    #[cfg(target_os = "windows")]
+    {
+        tracing::info!("Initializing Windows Tunnel...");
+        if !check_admin_privileges() {
+            return Err("Administrator privileges required for VPN tunnel".into());
+        }
+        
+        let _tunnel = vpn_core::tunnel::WindowsTunnel::new("wg0")
+            .map_err(|e| format!("Tunnel initialization failed: {}", e))?;
+        
+        tracing::info!("Windows Tunnel 'wg0' established effectively.");
+    }
+
     #[cfg(target_os = "android")]
     {
         use tauri::Manager;
@@ -94,8 +107,26 @@ fn get_vpn_status(state: State<'_, AppState>) -> VpnStatus {
     state.vpn_status.lock().unwrap().clone()
 }
 
+#[cfg(target_os = "windows")]
+fn check_admin_privileges() -> bool {
+    // Basic check for admin on Windows using a light method
+    // In a real app, we might use the 'is_executable_admin' crate
+    std::process::Command::new("net")
+        .arg("session")
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false)
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    #[cfg(target_os = "windows")]
+    if !check_admin_privileges() {
+        tracing::warn!("Application not running with administrator privileges. VPN tunnel may fail.");
+    }
+
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .manage(AppState {

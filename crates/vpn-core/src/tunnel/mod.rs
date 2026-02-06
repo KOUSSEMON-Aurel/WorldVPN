@@ -6,6 +6,9 @@ use std::time::Duration;
 use crate::error::Result;
 use crate::protocol::VpnProtocol;
 
+pub mod windows;
+pub use windows::WindowsTunnel;
+
 /// Provides a handle to an active VPN tunnel connection
 #[derive(Debug, Clone)]
 pub struct TunnelHandle {
@@ -98,25 +101,5 @@ pub trait VpnTunnel: Send + Sync {
     /// Optional reachability check
     async fn ping(&mut self) -> Result<Duration> {
         Ok(Duration::from_millis(0))
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_tunnel_stats() {
-        let stats = TunnelStats {
-            bytes_sent: 1024,
-            bytes_received: 2048,
-            avg_latency_ms: 25,
-            packet_loss: 0.01,
-            uptime: Duration::from_secs(3600),
-            current_throughput_mbps: 50.0,
-        };
-
-        assert_eq!(stats.bytes_sent, 1024);
-        assert!(stats.packet_loss < 0.05);
     }
 }

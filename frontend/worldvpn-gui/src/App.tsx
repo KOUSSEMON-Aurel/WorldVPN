@@ -1,7 +1,7 @@
 import { useState, useEffect } from "react";
-import { Shield, Globe, Wallet, Settings, Power, Activity, Lock, Users, Radio, Cpu, LogOut, History as HistoryIcon, MapPin, Zap } from "lucide-react";
+import { Shield, Globe, Wallet, Settings, Power, Activity, Lock, Users, Radio, Cpu, LogOut, History as HistoryIcon, Zap } from "lucide-react";
 import { motion, AnimatePresence } from "framer-motion";
-import { invoke } from "@tauri-apps/api/core";
+// import { invoke } from "@tauri-apps/api/core";
 import "./App.css";
 
 // Types
@@ -89,7 +89,6 @@ function App() {
     const fetchNodes = async () => {
       try {
         // En mode dev, si le backend n'est pas prêt, on garde des données de secours
-        const response: any = await invoke("get_vpn_status"); // placeholder check
         // Real logic would be: const response = await invoke("discover_nodes", { group: nodeGroup });
         // For now we will use a mix of real call when ready and simulated data
         if (activeTab === 'map') {

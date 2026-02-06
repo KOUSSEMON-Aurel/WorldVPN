@@ -53,5 +53,6 @@ flutter_rust_bridge = "=2.11.1"
 lazy_static = "1.4"
 parking_lot = "0.12"
 
-[dev-dependencies]
+[target.'cfg(windows)'.dependencies]
+wintun = "0.4"
 tokio-test = "0.4"
