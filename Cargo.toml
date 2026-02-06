@@ -1,0 +1,60 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/vpn-core",
+    "crates/vpn-ffi",
+    "crates/vpn-wasm",
+    "backend/server",
+    "frontend/cli",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+authors = ["WorldVPN Team"]
+license = "MIT"
+repository = "https://github.com/worldvpn/worldvpn"
+
+[workspace.dependencies]
+# VPN & Networking
+tokio = { version = "1.35", features = ["full"] }
+quinn = "0.11"
+trust-dns-resolver = "0.23"
+
+# Cryptographie
+ring = "0.17"
+x25519-dalek = "2.0"
+chacha20poly1305 = "0.10"
+ed25519-dalek = "2.1"
+hkdf = "0.12"
+sha2 = "0.10"
+
+# Sécurité mémoire
+zeroize = { version = "1.7", features = ["derive"] }
+secrecy = "0.8"
+
+# Sérialisation
+bincode = "1.3"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+
+# Erreurs et logs
+thiserror = "1.0"
+anyhow = "1.0"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+# Async
+async-trait = "0.1"
+futures = "0.3"
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+strip = true
+
+# Résolution des conflits de versions cryptographiques
+[patch.crates-io]
+# On aligne x25519-dalek sur la version rc.3 utilisée par boringtun 0.6
+x25519-dalek = { git = "https://github.com/dalek-cryptography/x25519-dalek", tag = "2.0.0-rc.3" }

@@ -1,0 +1,12 @@
+[package]
+name = "worldvpn-cli"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+vpn-core = { path = "../../crates/vpn-core" }
+tokio = { version = "1.35", features = ["full", "macros", "rt-multi-thread"] }
+clap = { version = "4.4", features = ["derive"] }
+anyhow = "1.0"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
+tracing.workspace = true

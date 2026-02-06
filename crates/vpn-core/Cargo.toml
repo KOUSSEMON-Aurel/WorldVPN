@@ -1,0 +1,51 @@
+[package]
+name = "vpn-core"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[dependencies]
+# Workspace deps
+tokio.workspace = true
+quinn.workspace = true
+trust-dns-resolver.workspace = true
+ring.workspace = true
+x25519-dalek.workspace = true
+chacha20poly1305.workspace = true
+ed25519-dalek.workspace = true
+hkdf.workspace = true
+sha2.workspace = true
+zeroize.workspace = true
+secrecy.workspace = true
+bincode.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+anyhow.workspace = true
+tracing.workspace = true
+async-trait.workspace = true
+futures.workspace = true
+
+# VPN Protocols
+# Using git version to fix compatibility issues with newer dependencies
+boringtun = { git = "https://github.com/cloudflare/boringtun", branch = "master" }
+
+# HTTP Client
+reqwest = { version = "0.11", features = ["json"] }
+
+# NAT Traversal
+stun = "0.5"
+webrtc-ice = "0.9"
+
+# Shadowsocks
+base64 = "0.21"
+shadowsocks-service = { version = "1.18", default-features = false, features = ["local", "local-tun"] }
+shadowsocks-crypto = "0.5"
+uuid = { version = "1.0", features = ["v4"] }
+rand = "0.8"
+serde_yaml = "0.9.34"
+chrono = { version = "0.4.43", features = ["serde"] }
+
+[dev-dependencies]
+tokio-test = "0.4"
