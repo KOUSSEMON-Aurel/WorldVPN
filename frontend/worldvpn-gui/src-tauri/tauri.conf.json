@@ -1,6 +1,6 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "WorldVPN",
+  "productName": "worldvpn-gui",
   "version": "0.1.0",
   "identifier": "com.aurel.worldvpn-gui",
   "build": {
@@ -12,11 +12,9 @@
   "app": {
     "windows": [
       {
-        "title": "WorldVPN - Decentralized P2P VPN",
+        "title": "worldvpn-gui",
         "width": 800,
-        "height": 700,
-        "resizable": true,
-        "fullscreen": false
+        "height": 600
       }
     ],
     "security": {

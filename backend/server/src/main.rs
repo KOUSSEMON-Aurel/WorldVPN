@@ -1,6 +1,7 @@
 mod state;
 mod api;
 mod auth;
+mod services;
 
 use crate::state::AppState;
 use std::net::SocketAddr;
@@ -27,6 +28,12 @@ async fn main() -> anyhow::Result<()> {
         .connect(&db_url)
         .await
         .expect("Failed to connect to PostgreSQL database");
+
+    // Start background services
+    let vpngate_pool = db_pool.clone();
+    tokio::spawn(async move {
+        services::vpngate::start_vpngate_sync(vpngate_pool).await;
+    });
 
     // Liveness probe on startup
     sqlx::query("SELECT 1").execute(&db_pool).await.expect("DB Health check failed");

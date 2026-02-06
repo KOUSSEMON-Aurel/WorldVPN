@@ -220,7 +220,7 @@ impl ProtocolSelector {
     /// Dynamically shifts weights based on environment (e.g., prioritize stealth in China)
     fn calculate_weights(&self, context: &SelectionContext) -> (f64, f64, f64, f64, f64) {
         let mut speed_w = 0.30;
-        let mut security_w = 0.20;
+        let security_w = 0.20;
         let mut stealth_w = 0.20;
         let mut battery_w = 0.15;
         let mut stability_w = 0.15;

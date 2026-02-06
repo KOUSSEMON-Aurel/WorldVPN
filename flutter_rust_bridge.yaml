@@ -1,0 +1,3 @@
+rust_input: crate::api
+rust_root: crates/vpn-core
+dart_output: frontend/worldvpn-mobile/lib/rust_gen

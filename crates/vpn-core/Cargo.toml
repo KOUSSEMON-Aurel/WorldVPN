@@ -5,6 +5,9 @@ edition.workspace = true
 authors.workspace = true
 license.workspace = true
 
+[lib]
+crate-type = ["lib", "cdylib", "staticlib"]
+
 [dependencies]
 # Workspace deps
 tokio.workspace = true
@@ -32,7 +35,7 @@ futures.workspace = true
 boringtun = { git = "https://github.com/cloudflare/boringtun", branch = "master" }
 
 # HTTP Client
-reqwest = { version = "0.11", features = ["json"] }
+reqwest = { version = "0.11", default-features = false, features = ["json", "rustls-tls"] }
 
 # NAT Traversal
 stun = "0.5"
@@ -46,6 +49,9 @@ uuid = { version = "1.0", features = ["v4"] }
 rand = "0.8"
 serde_yaml = "0.9.34"
 chrono = { version = "0.4.43", features = ["serde"] }
+flutter_rust_bridge = "=2.11.1"
+lazy_static = "1.4"
+parking_lot = "0.12"
 
 [dev-dependencies]
 tokio-test = "0.4"

@@ -1,0 +1,67 @@
+warning: Environment variable `ANDROID_HOME = "/home/aurel/Android/Sdk"` doesn't match `ANDROID_SDK_ROOT = "/opt/android-sdk"`
+    Building arm64-v8a (aarch64-linux-android)
+warning: Patch `x25519-dalek v2.0.0-rc.3 (https://github.com/dalek-cryptography/x25519-dalek?tag=2.0.0-rc.3#8613b5a8)` was not used in the crate graph.
+Check that the patched package version and available features are compatible
+with the dependency requirements. If the patch has a different version from
+what is locked in the Cargo.lock file, run `cargo update` to use the new
+version. This may also occur with an optional dependency that is not enabled.
+   Compiling vpn-core v0.1.0 (/home/aurel/CODE/WorldVPN/WorldVPN/crates/vpn-core)
+warning: unused imports: `error` and `warn`
+  --> crates/vpn-core/src/hysteria.rs:12:15
+   |
+12 | use tracing::{error, info, warn};
+   |               ^^^^^        ^^^^
+   |
+   = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused import: `warn`
+  --> crates/vpn-core/src/ikev2.rs:11:21
+   |
+11 | use tracing::{info, warn};
+   |                     ^^^^
+
+warning: unused import: `Path`
+ --> crates/vpn-core/src/openvpn.rs:9:17
+  |
+9 | use std::path::{Path, PathBuf};
+  |                 ^^^^
+
+warning: unused imports: `error` and `warn`
+  --> crates/vpn-core/src/openvpn.rs:12:15
+   |
+12 | use tracing::{error, info, warn};
+   |               ^^^^^        ^^^^
+
+warning: unused import: `Interface`
+ --> crates/vpn-core/src/wireguard.rs:5:52
+  |
+5 | use crate::tunnel::{ConnectionConfig, Credentials, Interface, TunnelHandle, TunnelStats, VpnTunnel};
+  |                                                    ^^^^^^^^^
+
+warning: unused import: `Instant`
+  --> crates/vpn-core/src/wireguard.rs:10:27
+   |
+10 | use std::time::{Duration, Instant};
+   |                           ^^^^^^^
+
+warning: unused variable: `password`
+  --> crates/vpn-core/src/ikev2.rs:58:9
+   |
+58 |         password: &str,
+   |         ^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_password`
+   |
+   = note: `#[warn(unused_variables)]` (part of `#[warn(unused)]`) on by default
+
+warning: field `config` is never read
+  --> crates/vpn-core/src/nat.rs:29:5
+   |
+28 | pub struct NatTraversal {
+   |            ------------ field in this struct
+29 |     config: NatConfig,
+   |     ^^^^^^
+   |
+   = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: `vpn-core` (lib) generated 8 warnings (run `cargo fix --lib -p vpn-core` to apply 6 suggestions)
+    Finished `release` profile [optimized] target(s) in 10.16s
+     Copying libraries to /home/aurel/CODE/WorldVPN/WorldVPN/frontend/worldvpn-mobile/android/app/src/main/jniLibs

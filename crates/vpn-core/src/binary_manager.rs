@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 use std::process::Command;
 use tokio::fs;
-use tracing::{info, warn, error};
+use tracing::info;
 
 use crate::error::{Result, VpnError};
 
@@ -82,7 +82,7 @@ impl BinaryManager {
         Ok(binary_path)
     }
 
-    fn get_platform_url(spec: &BinarySpec) -> Result<String> {
+    fn get_platform_url(_spec: &BinarySpec) -> Result<String> {
         #[cfg(target_os = "linux")]
         return Ok(spec.download_url_linux.clone());
 
@@ -92,7 +92,10 @@ impl BinaryManager {
         #[cfg(target_os = "windows")]
         return Ok(spec.download_url_windows.clone());
 
-        #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
+        #[cfg(target_os = "android")]
+        return Err(VpnError::InvalidConfig("External binaries not supported on Android yet".into()));
+
+        #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows", target_os = "android")))]
         Err(VpnError::InvalidConfig("Unsupported OS".into()))
     }
 

@@ -3,6 +3,8 @@
 //! Provides unified abstractions and implementations for multiple VPN protocols
 //! including WireGuard, Shadowsocks, OpenVPN, and more.
 
+mod frb_generated;
+
 pub mod abuse;
 pub mod binary_manager;
 pub mod client;
@@ -22,3 +24,4 @@ pub mod shadowsocks;
 pub mod tunnel;
 pub mod v2ray;
 pub mod wireguard;
+pub mod api;

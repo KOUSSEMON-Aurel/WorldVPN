@@ -6,6 +6,7 @@ members = [
     "crates/vpn-wasm",
     "backend/server",
     "frontend/cli",
+    "frontend/worldvpn-gui/src-tauri",
 ]
 
 [workspace.package]

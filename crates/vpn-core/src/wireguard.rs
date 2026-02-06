@@ -127,7 +127,7 @@ impl VpnTunnel for WireGuardTunnel {
         }
     }
 
-    async fn recv(&mut self, buf: &mut [u8]) -> Result<usize> {
+    async fn recv(&mut self, _buf: &mut [u8]) -> Result<usize> {
         // Simulation réception
         // Dans la réalité: lire socket UDP -> tunnel.decapsulate -> écrire dans buf
         tokio::time::sleep(Duration::from_millis(10)).await;
