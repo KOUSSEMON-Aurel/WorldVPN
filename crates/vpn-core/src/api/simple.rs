@@ -37,9 +37,18 @@ lazy_static! {
     static ref AUTH_TOKEN: Mutex<Option<String>> = Mutex::new(None);
     static ref LOGGED_USER: Mutex<Option<String>> = Mutex::new(None);
     static ref IS_SHARING: Mutex<bool> = Mutex::new(false);
+    static ref BACKEND_URL: Mutex<String> = Mutex::new("http://localhost:3000".to_string());
 }
 
-const BACKEND_URL: &str = "http://localhost:3000";
+pub fn set_backend_url(url: String) {
+    if let Ok(mut guard) = BACKEND_URL.lock() {
+        *guard = url;
+    }
+}
+
+fn get_backend_url() -> String {
+    BACKEND_URL.lock().unwrap().clone()
+}
 
 pub fn greet(name: String) -> String {
     format!("Hello, {}! This message comes from your Rust backend 🦀", name)
@@ -58,7 +67,7 @@ pub fn login_user(username: String, password: String) -> anyhow::Result<String> 
 
     let rt = tokio::runtime::Runtime::new()?;
     rt.block_on(async {
-        let client = VpnApiClient::new(BACKEND_URL.to_string());
+        let client = VpnApiClient::new(get_backend_url());
         let response = client.login(username.clone(), password).await?;
         
         if let Ok(mut token_guard) = AUTH_TOKEN.lock() {
@@ -113,7 +122,7 @@ pub fn start_vpn_connection(protocol_str: String, country_code: String) -> anyho
         if username == "Guest" {
             tracing::info!("Guest connection bypassing backend matchmaking. Target: {:?}", chosen_protocol);
         } else {
-            let client = VpnApiClient::new(BACKEND_URL.to_string());
+            let client = VpnApiClient::new(get_backend_url());
             let conn_info = client.connect(chosen_protocol, username, None, &token).await?;
             tracing::info!("Connection successful to: {}", conn_info.server_endpoint);
         }
@@ -145,7 +154,7 @@ pub fn start_sharing() -> anyhow::Result<()> {
         tracing::info!("UPnP: Requesting port mapping for WireGuard (51820) and Hysteria2 (44343)");
 
         // 2. Register on Backend
-        let client = VpnApiClient::new(BACKEND_URL.to_string());
+        let client = VpnApiClient::new(get_backend_url());
         // In a real impl, we'd use reqwest directly here or extend VpnApiClient
         // For now, we simulate the registration
         tracing::info!("Registering node on backend: country=BJ, nat={:?}", nat_type);
