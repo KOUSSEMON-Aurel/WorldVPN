@@ -100,6 +100,7 @@ pub async fn login(
 }
 
 #[derive(Deserialize)]
+#[allow(dead_code)]
 pub struct RegisterRequest {
     pub username: String,
     pub password: String,

@@ -1,6 +1,5 @@
 use sqlx::PgPool;
 use std::time::Duration;
-use base64::{Engine as _, engine::general_purpose};
 
 /// VPN Gate API URL (CSV Format)
 const VPNGATE_API_URL: &str = "http://www.vpngate.net/api/iphone/";

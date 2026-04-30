@@ -84,6 +84,15 @@ function App() {
     });
   };
 
+  const handleGuestLogin = () => {
+    setUser({
+      username: "Guest",
+      credits: 0,
+      token: "guest-token"
+    });
+    setNodeGroup("PUBLIC"); // Force PUBLIC nodes for guests
+  };
+
   // Fetch nodes from backend
   useEffect(() => {
     const fetchNodes = async () => {
@@ -187,6 +196,15 @@ function App() {
               className="text-primary font-bold hover:underline"
             >
               {authMode === 'login' ? "Register Now" : "Login Here"}
+            </button>
+          </div>
+
+          <div className="mt-4 flex justify-center text-xs">
+            <button
+              onClick={handleGuestLogin}
+              className="text-text-muted hover:text-white transition-colors"
+            >
+              Access as Guest
             </button>
           </div>
         </motion.div>
@@ -419,7 +437,8 @@ function App() {
                   <div className="flex bg-surface-highlight/40 p-1 rounded-xl border border-white/5">
                     <button
                       onClick={() => setNodeGroup('COMMUNITY')}
-                      className={`px-4 py-1.5 rounded-lg text-xs font-bold transition-all ${nodeGroup === 'COMMUNITY' ? 'bg-primary text-background shadow-[0_0_10px_rgba(0,242,234,0.5)]' : 'text-text-muted hover:text-white'}`}
+                      disabled={user?.username === "Guest"} // Disable for guests
+                      className={`px-4 py-1.5 rounded-lg text-xs font-bold transition-all ${nodeGroup === 'COMMUNITY' ? 'bg-primary text-background shadow-[0_0_10px_rgba(0,242,234,0.5)]' : 'text-text-muted hover:text-white'} ${user?.username === "Guest" ? 'opacity-30 cursor-not-allowed' : ''}`}
                     >
                       Community
                     </button>

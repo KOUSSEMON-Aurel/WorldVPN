@@ -11,6 +11,7 @@ use vpn_core::protocol::VpnProtocol;
 use sqlx::Row;
 
 #[derive(Deserialize)]
+#[allow(dead_code)]
 pub struct ConnectRequest {
     pub protocol: VpnProtocol,
     pub username: String,
@@ -43,7 +44,7 @@ pub async fn connect(
         .fetch_optional(pool)
         .await;
 
-    let credits: i64 = match balance_check {
+    let credits: i32 = match balance_check {
         Ok(Some(row)) => row.get("credits"),
         Ok(None) => 0,
         Err(_) => 0,
@@ -89,18 +90,43 @@ pub async fn connect(
 
     let node_result = node_query.fetch_optional(pool).await;
 
-    let (node_id, node_country, endpoint) = match node_result {
+    let (node_id, node_country, endpoint, is_fallback) = match node_result {
         Ok(Some(row)) => {
             let nid: String = row.get("id");
             let country: String = row.get("country_code");
-            // In production: decrypt/resolve the actual IP
-            let ep = format!("peer-{}.worldvpn.net:51820", &nid[..8]);
-            (Some(nid), Some(country), ep)
+            let _ip_hash: String = row.get("public_ip_hash");
+            // In production: decrypt actual IP from ip_hash
+            // For Hole Punching, we need real IPv4/IPv6 instead of hostname
+            let simulated_ip = format!("198.51.100.{}", (nid.as_bytes()[0] % 200) + 10);
+            let ep = format!("{}:51820", simulated_ip);
+            (Some(nid), Some(country), ep, false)
         }
         _ => {
-            // Fallback to central server if no P2P node available
-            tracing::warn!("No P2P nodes available, using fallback server");
-            (None, None, "fallback.worldvpn.net:51820".to_string())
+            // Fallback to VPNGate nodes stored in the database
+            tracing::warn!("No P2P nodes available, attempting VPNGate fallback");
+            let fallback_query = sqlx::query(
+                "SELECT id, country_code, public_ip_hash FROM nodes WHERE id LIKE 'vpngate_%' ORDER BY RANDOM() LIMIT 1"
+            ).fetch_optional(pool).await;
+
+            match fallback_query {
+                Ok(Some(row)) => {
+                    let nid: String = row.get("id");
+                    let country: String = row.get("country_code");
+                    // Extract IP from vpngate_IP_ADDRESS pattern
+                    let parts: Vec<&str> = nid.split('_').collect();
+                    let ip = if parts.len() == 5 {
+                        format!("{}.{}.{}.{}", parts[1], parts[2], parts[3], parts[4])
+                    } else {
+                        "fallback.worldvpn.net".to_string()
+                    };
+                    let ep = format!("{}:1194", ip);
+                    (Some(nid), Some(country), ep, true)
+                }
+                _ => {
+                    tracing::error!("Absolute failure: Neither P2P nor VPNGate nodes available.");
+                    (None, None, "error.worldvpn.net:0".to_string(), true)
+                }
+            }
         }
     };
 
@@ -131,30 +157,32 @@ pub async fn connect(
     .execute(pool)
     .await;
 
-    // 4. If using P2P node, increment connection count and create peer session
+    // 4. If using P2P node (and not a fallback), increment connection count and create peer session
     if let Some(ref nid) = node_id {
-        let _ = sqlx::query("UPDATE nodes SET current_connections = current_connections + 1 WHERE id = $1")
+        if !is_fallback {
+            let _ = sqlx::query("UPDATE nodes SET current_connections = current_connections + 1 WHERE id = $1")
+                .bind(nid)
+                .execute(pool)
+                .await;
+
+            // Create transparency record
+            let peer_session_id = uuid::Uuid::new_v4().to_string();
+            let client_country = "XX"; // In production: detect from IP
+            let client_hash = format!("hash_{}", &user.0.sub[..8]);
+
+            let _ = sqlx::query(
+                r#"INSERT INTO peer_sessions 
+                   (id, node_id, node_owner_id, client_country, client_id_hash, traffic_type)
+                   SELECT $1, $2, user_id, $3, $4, 'browsing'
+                   FROM nodes WHERE id = $2"#
+            )
+            .bind(&peer_session_id)
             .bind(nid)
+            .bind(client_country)
+            .bind(&client_hash)
             .execute(pool)
             .await;
-
-        // Create transparency record
-        let peer_session_id = uuid::Uuid::new_v4().to_string();
-        let client_country = "XX"; // In production: detect from IP
-        let client_hash = format!("hash_{}", &user.0.sub[..8]);
-
-        let _ = sqlx::query(
-            r#"INSERT INTO peer_sessions 
-               (id, node_id, node_owner_id, client_country, client_id_hash, traffic_type)
-               SELECT $1, $2, user_id, $3, $4, 'browsing'
-               FROM nodes WHERE id = $2"#
-        )
-        .bind(&peer_session_id)
-        .bind(nid)
-        .bind(client_country)
-        .bind(&client_hash)
-        .execute(pool)
-        .await;
+        }
     }
 
     tracing::info!("Session created: {} -> {} via {:?}", session_id, endpoint, payload.protocol);

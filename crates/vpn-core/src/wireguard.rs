@@ -2,12 +2,12 @@
 
 use crate::error::{Result, VpnError};
 use crate::protocol::VpnProtocol;
-use crate::tunnel::{ConnectionConfig, Credentials, Interface, TunnelHandle, TunnelStats, VpnTunnel};
+use crate::tunnel::{ConnectionConfig, Credentials, TunnelHandle, TunnelStats, VpnTunnel};
 use async_trait::async_trait;
 use boringtun::noise::{Tunn, TunnResult};
 use std::net::{IpAddr, SocketAddr};
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 use tokio::sync::Mutex;
 
 /// Tunnel WireGuard

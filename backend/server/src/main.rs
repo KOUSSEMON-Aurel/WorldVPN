@@ -29,6 +29,13 @@ async fn main() -> anyhow::Result<()> {
         .await
         .expect("Failed to connect to PostgreSQL database");
 
+    // Run database migrations automatically
+    info!("🔄 Running database migrations...");
+    sqlx::migrate!("./migrations")
+        .run(&db_pool)
+        .await
+        .expect("Failed to run database migrations");
+
     // Start background services
     let vpngate_pool = db_pool.clone();
     tokio::spawn(async move {

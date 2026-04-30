@@ -48,7 +48,7 @@ class MapScreen extends StatelessWidget {
                   begin: Alignment.topCenter,
                   end: Alignment.bottomCenter,
                   colors: [
-                    const Color(0xFF0A0F1C).withOpacity(0.9),
+                    const Color(0xFF0A0F1C).withValues(alpha: 0.9),
                     Colors.transparent,
                   ],
                 ),

@@ -120,7 +120,7 @@ class SettingsScreen extends ConsumerWidget {
           insetPadding: const EdgeInsets.symmetric(horizontal: 20, vertical: 40),
           shape: RoundedRectangleBorder(
             borderRadius: BorderRadius.circular(24),
-            side: BorderSide(color: primaryColor.withOpacity(0.3), width: 1),
+            side: BorderSide(color: primaryColor.withValues(alpha: 0.3), width: 1),
           ),
           child: Padding(
             padding: const EdgeInsets.all(24.0),
@@ -150,10 +150,10 @@ class SettingsScreen extends ConsumerWidget {
                         margin: const EdgeInsets.symmetric(vertical: 4),
                         padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
                         decoration: BoxDecoration(
-                          color: isSelected ? primaryColor.withOpacity(0.1) : Colors.transparent,
+                          color: isSelected ? primaryColor.withValues(alpha: 0.1) : Colors.transparent,
                           borderRadius: BorderRadius.circular(16),
                           border: Border.all(
-                            color: isSelected ? primaryColor.withOpacity(0.5) : Colors.transparent,
+                            color: isSelected ? primaryColor.withValues(alpha: 0.5) : Colors.transparent,
                           ),
                         ),
                         child: Row(
@@ -208,7 +208,7 @@ class SettingsScreen extends ConsumerWidget {
     return Container(
       margin: const EdgeInsets.only(bottom: 8),
       decoration: BoxDecoration(
-        color: Colors.white.withOpacity(0.03),
+        color: Colors.white.withValues(alpha: 0.03),
         borderRadius: BorderRadius.circular(18),
       ),
       child: ListTile(
@@ -217,7 +217,7 @@ class SettingsScreen extends ConsumerWidget {
         leading: Container(
           padding: const EdgeInsets.all(10),
           decoration: BoxDecoration(
-            color: Theme.of(context).colorScheme.primary.withOpacity(0.05),
+            color: Theme.of(context).colorScheme.primary.withValues(alpha: 0.05),
             borderRadius: BorderRadius.circular(12),
           ),
           child: Icon(icon, color: Theme.of(context).colorScheme.primary, size: 18),
@@ -233,7 +233,7 @@ class SettingsScreen extends ConsumerWidget {
     return Container(
       margin: const EdgeInsets.only(bottom: 8),
       decoration: BoxDecoration(
-        color: Colors.white.withOpacity(0.03),
+        color: Colors.white.withValues(alpha: 0.03),
         borderRadius: BorderRadius.circular(18),
       ),
       child: SwitchListTile(
@@ -242,7 +242,7 @@ class SettingsScreen extends ConsumerWidget {
         contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 0),
         title: Text(title, style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 15)),
         subtitle: Text(subtitle, style: const TextStyle(color: Colors.grey, fontSize: 11)),
-        activeColor: const Color(0xFF00F2EA),
+        activeThumbColor: const Color(0xFF00F2EA),
       ),
     );
   }

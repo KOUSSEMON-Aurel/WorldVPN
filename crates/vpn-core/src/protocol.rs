@@ -22,8 +22,22 @@ pub enum VpnProtocol {
     /// Advanced stealth protocol for high-censorship areas
     VLESS,
 }
-
 impl VpnProtocol {
+    /// Returns the name of the protocol
+    pub fn name(&self) -> &'static str {
+        match self {
+            VpnProtocol::WireGuard => "WireGuard",
+            VpnProtocol::WireGuardObfuscated => "WireGuard Obfuscated",
+            VpnProtocol::Shadowsocks => "Shadowsocks",
+            VpnProtocol::OpenVpnTcp => "OpenVPN (TCP)",
+            VpnProtocol::OpenVpnUdp => "OpenVPN (UDP)",
+            VpnProtocol::IKEv2 => "IKEv2",
+            VpnProtocol::Hysteria2 => "Hysteria2",
+            VpnProtocol::Trojan => "Trojan",
+            VpnProtocol::VLESS => "VLESS",
+        }
+    }
+
     /// Returns the default server port for a protocol
     pub fn default_port(&self) -> u16 {
         match self {

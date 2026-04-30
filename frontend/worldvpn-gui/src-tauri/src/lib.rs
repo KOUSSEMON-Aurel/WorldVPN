@@ -5,6 +5,7 @@ use serde::{Serialize, Deserialize};
 // Shared state to track VPN status across the app
 struct AppState {
     vpn_status: Mutex<VpnStatus>,
+    is_sharing: Mutex<bool>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -103,6 +104,20 @@ async fn disconnect_vpn(state: State<'_, AppState>) -> Result<VpnStatus, String>
 }
 
 #[tauri::command]
+async fn start_sharing(state: State<'_, AppState>) -> Result<bool, String> {
+    let mut sharing = state.is_sharing.lock().map_err(|_| "Failed to lock state")?;
+    *sharing = true;
+    Ok(true)
+}
+
+#[tauri::command]
+async fn stop_sharing(state: State<'_, AppState>) -> Result<bool, String> {
+    let mut sharing = state.is_sharing.lock().map_err(|_| "Failed to lock state")?;
+    *sharing = false;
+    Ok(false)
+}
+
+#[tauri::command]
 fn get_vpn_status(state: State<'_, AppState>) -> VpnStatus {
     state.vpn_status.lock().unwrap().clone()
 }
@@ -131,11 +146,14 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .manage(AppState {
             vpn_status: Mutex::new(VpnStatus::default()),
+            is_sharing: Mutex::new(false),
         })
         .invoke_handler(tauri::generate_handler![
             connect_vpn, 
             disconnect_vpn, 
-            get_vpn_status
+            get_vpn_status,
+            start_sharing,
+            stop_sharing
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

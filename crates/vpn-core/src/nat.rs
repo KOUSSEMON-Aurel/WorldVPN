@@ -1,3 +1,4 @@
+use serde::{Deserialize, Serialize};
 use crate::error::{Result, VpnError};
 use std::net::SocketAddr;
 
@@ -7,6 +8,17 @@ pub enum ConnectionPath {
     Direct,        // Public IP to Public IP
     HolePunching,  // Successfully pierced NAT via STUN/ICE
     Relay,         // Failed P2P, falling back to TURN relay
+}
+
+/// NAT behavior type classification
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum NatType {
+    Open,
+    FullCone,
+    RestrictedCone,
+    PortRestrictedCone,
+    Symmetric,
+    Unknown,
 }
 
 /// Parameters for discovering network topology and piercing firewalls
@@ -26,6 +38,7 @@ pub struct TurnServer {
 
 /// Orchestrates NAT traversal techniques to maximize P2P success rates
 pub struct NatTraversal {
+    #[allow(dead_code)]
     config: NatConfig,
 }
 
@@ -33,6 +46,26 @@ impl NatTraversal {
     pub fn new(config: NatConfig) -> Self {
         Self { config }
     }
+
+    /// Detects the NAT type using configured STUN servers.
+    /// Crucial for deciding if UDP Hole Punching is feasible.
+    pub async fn detect_nat_type(&self) -> Result<NatType> {
+        tracing::info!("Detecting NAT type using STUN...");
+        // FIXME: Real implementation using STUN RFC 3489 / RFC 5389
+        // 1. Send request to STUN Server 1
+        // 2. Send request to STUN Server 2
+        // 3. If mapped ip/port differ -> Symmetric NAT
+        
+        let symmetric_simulated = false; // Scaffolding
+        
+        if symmetric_simulated {
+            tracing::warn!("Symmetric NAT detected! UDP Hole Punching will likely fail.");
+            Ok(NatType::Symmetric)
+        } else {
+            Ok(NatType::PortRestrictedCone)
+        }
+    }
+
 
     /// Attempts to establish a connection using a prioritized progressive strategy
     pub async fn establish_connection(&self, peer_addr: SocketAddr) -> Result<ConnectionPath> {

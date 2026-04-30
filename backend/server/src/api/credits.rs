@@ -1,4 +1,4 @@
-use axum::{extract::{State, Query}, http::StatusCode, response::IntoResponse, Json};
+use axum::{extract::State, http::StatusCode, response::IntoResponse, Json};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use sqlx::Row;

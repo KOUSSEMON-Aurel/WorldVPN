@@ -21,17 +21,17 @@ class GlassBottomNav extends StatelessWidget {
         filter: ImageFilter.blur(sigmaX: 10, sigmaY: 10),
         child: Container(
           decoration: BoxDecoration(
-            color: Colors.black.withOpacity(0.6),
+            color: Colors.black.withValues(alpha: 0.6),
             border: Border(
               top: BorderSide(
-                color: Colors.white.withOpacity(0.1),
+                color: Colors.white.withValues(alpha: 0.1),
                 width: 1,
               ),
             ),
           ),
           child: NavigationBar(
             backgroundColor: Colors.transparent,
-            indicatorColor: Colors.cyan.withOpacity(0.2),
+            indicatorColor: Colors.cyan.withValues(alpha: 0.2),
             selectedIndex: navigationShell.currentIndex,
             onDestinationSelected: (index) {
               navigationShell.goBranch(

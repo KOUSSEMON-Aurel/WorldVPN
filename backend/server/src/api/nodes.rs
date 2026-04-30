@@ -1,5 +1,5 @@
 use axum::{
-    extract::{State, Query, Path},
+    extract::{State, Query},
     http::StatusCode,
     response::IntoResponse,
     Json,
@@ -20,15 +20,18 @@ pub struct RegisterNodeRequest {
     pub allow_streaming: Option<bool>,
     pub allow_torrents: Option<bool>,
     pub max_daily_gb: Option<i32>,
+    pub nat_type: Option<String>,
 }
 
 #[derive(Serialize)]
+#[allow(dead_code)]
 pub struct NodeInfo {
     pub id: String,
     pub country_code: String,
     pub reputation_score: i32,
     pub current_connections: i32,
     pub is_online: bool,
+    pub nat_type: String,
 }
 
 /// POST /nodes/register - Register current device as a sharing node
@@ -48,10 +51,11 @@ pub async fn register_node(
     let result = sqlx::query(
         r#"INSERT INTO nodes 
            (id, user_id, public_ip_hash, country_code, city, available_bandwidth_mbps, 
-            protocols, allow_streaming, allow_torrents, max_daily_gb, is_online)
-           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, TRUE)
+            protocols, allow_streaming, allow_torrents, max_daily_gb, is_online, nat_type)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, TRUE, $11)
            ON CONFLICT (id) DO UPDATE SET
                is_online = TRUE,
+               nat_type = EXCLUDED.nat_type,
                last_heartbeat = CURRENT_TIMESTAMP,
                updated_at = CURRENT_TIMESTAMP
            RETURNING id"#
@@ -66,6 +70,7 @@ pub async fn register_node(
     .bind(payload.allow_streaming.unwrap_or(true))
     .bind(payload.allow_torrents.unwrap_or(false))
     .bind(payload.max_daily_gb.unwrap_or(50))
+    .bind(payload.nat_type.unwrap_or_else(|| "Unknown".to_string()))
     .fetch_one(pool)
     .await;
 
@@ -89,6 +94,7 @@ pub async fn register_node(
 
 /// Query parameters for node discovery
 #[derive(Deserialize)]
+#[allow(dead_code)]
 pub struct DiscoverQuery {
     pub country: Option<String>,
     pub protocol: Option<String>,
@@ -110,7 +116,7 @@ pub async fn discover_nodes(
     // Build dynamic query based on filters
     let mut query = String::from(
         r#"SELECT id, country_code, reputation_score, current_connections,
-                  available_bandwidth_mbps, avg_latency_ms, protocols, node_group
+                  available_bandwidth_mbps, avg_latency_ms, protocols, node_group, nat_type
            FROM nodes 
            WHERE is_online = TRUE 
              AND current_connections < max_connections
@@ -118,7 +124,7 @@ pub async fn discover_nodes(
     );
     
     let mut bind_count = 1;
-    
+
     if params.country.is_some() {
         bind_count += 1;
         query.push_str(&format!(" AND country_code = ${}", bind_count));
@@ -137,7 +143,6 @@ pub async fn discover_nodes(
     query.push_str(" ORDER BY reputation_score DESC, avg_latency_ms ASC");
     query.push_str(&format!(" LIMIT {}", limit));
 
-    // Execute with dynamic bindings
     let mut q = sqlx::query(&query).bind(&user.sub);
     
     if let Some(ref country) = params.country {
@@ -155,6 +160,7 @@ pub async fn discover_nodes(
     match result {
         Ok(rows) => {
             let nodes: Vec<serde_json::Value> = rows.iter().map(|row| {
+                let nat_type_raw: Option<String> = row.try_get("nat_type").ok();
                 json!({
                     "id": row.get::<String, _>("id"),
                     "country_code": row.get::<String, _>("country_code"),
@@ -163,7 +169,8 @@ pub async fn discover_nodes(
                     "bandwidth_mbps": row.get::<i32, _>("available_bandwidth_mbps"),
                     "latency_ms": row.get::<i32, _>("avg_latency_ms"),
                     "protocols": row.get::<String, _>("protocols"),
-                    "group": row.get::<String, _>("node_group")
+                    "group": row.get::<String, _>("node_group"),
+                    "nat_type": nat_type_raw.unwrap_or_else(|| "Unknown".to_string())
                 })
             }).collect();
 

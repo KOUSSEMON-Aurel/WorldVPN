@@ -33,7 +33,7 @@ class ProfileScreen extends StatelessWidget {
                   decoration: BoxDecoration(
                     shape: BoxShape.circle,
                     gradient: LinearGradient(colors: [primaryColor, Colors.purple]),
-                    border: Border.all(color: Colors.white.withOpacity(0.2), width: 4),
+                    border: Border.all(color: Colors.white.withValues(alpha: 0.2), width: 4),
                   ),
                   child: const Icon(LucideIcons.user, size: 50, color: Colors.white),
                 ),
@@ -49,9 +49,9 @@ class ProfileScreen extends StatelessWidget {
           Container(
             padding: const EdgeInsets.all(20),
             decoration: BoxDecoration(
-              color: primaryColor.withOpacity(0.1),
+              color: primaryColor.withValues(alpha: 0.1),
               borderRadius: BorderRadius.circular(24),
-              border: Border.all(color: primaryColor.withOpacity(0.3)),
+              border: Border.all(color: primaryColor.withValues(alpha: 0.3)),
             ),
             child: Column(
               children: [

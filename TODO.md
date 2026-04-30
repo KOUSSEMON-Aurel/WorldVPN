@@ -1,4 +1,4 @@
-Voici la version finale et structurée de ta stratégie **WorldVPN** au format Markdown. Cette version inclut l'intégration de **Hysteria2**, le fallback **Mullvad**, et la gestion des **Nœuds Mixtes** (double rôle simultané).
+Voici la version finale et structurée de ta stratégie **WorldVPN** au format Markdown. Cette version inclut l'intégration de **Hysteria2**, le secours **Cloudflare WARP**, et la gestion des **Nœuds Mixtes** (double rôle simultané).
 
 ---
 
@@ -10,11 +10,11 @@ L'objectif est d'offrir une invisibilité totale et une connexion "Plug & Play" 
 
 Dans ce modèle, chaque utilisateur devient un **Nœud**. L'application peut être **Client et Fournisseur simultanément**.
 
-| Rôle | Entité | Mission Critique |
-| :--- | :--- | :--- |
-| **Coordinateur** | **Backend Render** | Gère le matchmaking P2P (annuaire) et distribue les clés de secours (Mullvad/VPNGate). |
+| Rôle                 | Entité              | Mission Critique                                                                                       |
+| :------------------- | :------------------ | :----------------------------------------------------------------------------------------------------- |
+| **Coordinateur**     | **Backend Render**  | Gère le matchmaking P2P (annuaire) et distribue les clés de secours (Cloudflare/VPNGate).              |
 | **Nœud Fournisseur** | **App User (Node)** | Partage sa connexion. Tente l'ouverture de port via **UPnP** et héberge un mini-serveur **Hysteria2**. |
-| **Nœud Client** | **App User (Node)** | Scanne son environnement et descend "l'escalier" des protocoles jusqu'à la connexion. |
+| **Nœud Client**      | **App User (Node)** | Scanne son environnement et descend "l'escalier" des protocoles jusqu'à la connexion.                  |
 
 
 
@@ -43,14 +43,14 @@ L'application suit cet ordre de priorité pour garantir 100% de succès sans con
 
 ## 3. Tableau de Réalisme & Fiabilité
 
-| Composant | Faisabilité | Fiabilité | Rôle spécifique |
-| :--- | :--- | :--- | :--- |
-| **WireGuard P2P** | ✅ Élevée | 60-70% | Vitesse maximale sur bon Wi-Fi. |
-| **Hysteria2 P2P** | ✅ Moyenne | 75% | Stabilité extrême sur mobile (QUIC). |
-| **Shadowsocks P2P** | ✅ Élevée | **95%** | Le sauveur quand l'UDP est bloqué. |
-| **Fallback Mullvad** | ✅ Élevée | **100%** | Sécurité premium et anonymat garanti. |
-| **Fallback VPNGate** | ✅ Élevée | **100%** | La garantie gratuite ultime. |
-| **Double Rôle (C/S)** | ✅ Moyenne | N/A | Permet de consommer et partager en même temps. |
+| Composant             | Faisabilité | Fiabilité | Rôle spécifique                                |
+| :-------------------- | :---------- | :-------- | :--------------------------------------------- |
+| **WireGuard P2P**     | ✅ Élevée    | 60-70%    | Vitesse maximale sur bon Wi-Fi.                |
+| **Hysteria2 P2P**     | ✅ Moyenne   | 75%       | Stabilité extrême sur mobile (QUIC).           |
+| **Shadowsocks P2P**   | ✅ Élevée    | **95%**   | Le sauveur quand l'UDP est bloqué.             |
+| **Fallback Mullvad**  | ✅ Élevée    | **100%**  | Sécurité premium et anonymat garanti.          |
+| **Fallback VPNGate**  | ✅ Élevée    | **100%**  | La garantie gratuite ultime.                   |
+| **Double Rôle (C/S)** | ✅ Moyenne   | N/A       | Permet de consommer et partager en même temps. |
 
 ---
 
@@ -104,22 +104,36 @@ Dans ton architecture, chaque instance de l'application possède deux fils (thre
 
 Pour que cela marche sans bug, tu dois faire attention à deux choses dans ton code `vpn-core` :
 
-| Défi | Solution |
-| :--- | :--- |
-| **Consommation CPU/Batterie** | L'app doit limiter le nombre de clients qu'un fournisseur peut accepter (ex: max 2 ou 3 personnes). |
-| **Bande passante** | Si l'utilisateur télécharge un gros fichier tout en servant quelqu'un, sa connexion va ramer. Il faut prévoir un réglage "Priorité à mon usage personnel". |
-| **Routage IP** | Il faut bien séparer le trafic qui *sort* du tunnel (celui que tu reçois de ton client) et le trafic qui *entre* dans ton tunnel (ton propre surf). |
+| Défi                          | Solution                                                                                                                                                   |
+| :---------------------------- | :--------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Consommation CPU/Batterie** | L'app doit limiter le nombre de clients qu'un fournisseur peut accepter (ex: max 2 ou 3 personnes).                                                        |
+| **Bande passante**            | Si l'utilisateur télécharge un gros fichier tout en servant quelqu'un, sa connexion va ramer. Il faut prévoir un réglage "Priorité à mon usage personnel". |
+| **Routage IP**                | Il faut bien séparer le trafic qui *sort* du tunnel (celui que tu reçois de ton client) et le trafic qui *entre* dans ton tunnel (ton propre surf).        |
 
 ---
 
 ### 4. Impact sur ton Tableau de Réalisme
 
-| Composant | Faisabilité | Difficulté |
-| :--- | :--- | :--- |
-| **Rôle simultané (Client+Serveur)** | ✅ Oui | **Moyenne** (Gestion des ports) |
-| **Partage de bande passante** | ✅ Oui | **Faible** (Limiteur de débit) |
+| Composant                           | Faisabilité | Difficulté                      |
+| :---------------------------------- | :---------- | :------------------------------ |
+| **Rôle simultané (Client+Serveur)** | ✅ Oui       | **Moyenne** (Gestion des ports) |
+| **Partage de bande passante**       | ✅ Oui       | **Faible** (Limiteur de débit)  |
 
 ---
 
 ### En résumé pour WorldVPN
 C'est ce qu'on appelle un réseau **symétrique**. C'est ce qui rendra ton projet "éthique et décentralisé" : personne n'est au-dessus des autres, tout le monde aide tout le monde.
+
+---
+
+## 6. État Actuel & Checklist Finale (Ce qu'il reste pour la V1)
+
+L'intelligence de la **Cascade (Selector)**, le **Fallback (Mullvad/VPNGate)** et l'infrastructure de signalisation du **Backend** sont validés, testés, et compilent parfaitement.
+
+Pour que WorldVPN fonctionne physiquement sur un téléphone, voici les chantiers restants :
+
+- [ ] **Phase 3: Mobile UI & FFI Integration** (IN PROGRESS)
+    - [ ] Link `vpn-core` to `worldvpn-mobile` via FRB
+    - [ ] Implement live VpnStatus stream for dashboard
+    - [ ] Connect Authentication to Backend API
+    - [ ] UI Polish: Modern dark-mode aesthetics

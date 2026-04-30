@@ -25,3 +25,4 @@ pub mod tunnel;
 pub mod v2ray;
 pub mod wireguard;
 pub mod api;
+pub mod fallback;

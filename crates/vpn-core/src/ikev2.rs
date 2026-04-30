@@ -8,7 +8,7 @@ use std::net::{IpAddr, Ipv4Addr};
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 use tokio::process::{Child, Command};
-use tracing::{info, warn};
+use tracing::info;
 
 use crate::{
     error::{Result, VpnError},
@@ -55,7 +55,7 @@ impl IKEv2Tunnel {
         &self,
         config: &ConnectionConfig,
         username: &str,
-        password: &str,
+        _password: &str,
     ) -> Result<PathBuf> {
         let temp_dir = std::env::temp_dir();
         let config_path = temp_dir.join(format!("ikev2_{}.conf", uuid::Uuid::new_v4()));

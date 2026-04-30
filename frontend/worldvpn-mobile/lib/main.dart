@@ -9,12 +9,9 @@ void main() async {
   WidgetsFlutterBinding.ensureInitialized();
   
   try {
-    print("Initializing Rust...");
     // Timeout de 3 secondes max pour l'init Rust
     await RustLib.init().timeout(const Duration(seconds: 3));
-    print("Rust initialized successfully.");
   } catch (e) {
-    print("RUST INIT FAILED: $e");
     // On continue quand même pour afficher l'UI
   }
   
@@ -29,20 +26,20 @@ class WorldVpnApp extends StatelessWidget {
     return MaterialApp.router(
       title: 'WorldVPN',
       themeMode: ThemeMode.dark,
-      theme: ThemeData.dark().copyWith(
+      theme: ThemeData(
+        brightness: Brightness.dark,
+        useMaterial3: true,
         scaffoldBackgroundColor: const Color(0xFF0A0F1C), // Deep dark blue
         colorScheme: const ColorScheme.dark(
           primary: Color(0xFF00F2EA),   // Cyan Neon
           secondary: Color(0xFF7000FF), // Purple Neon
           surface: Color(0xFF131B2E),   // Lighter blue for cards
-          background: Color(0xFF0A0F1C),
           onSurface: Colors.white,
         ),
         textTheme: GoogleFonts.outfitTextTheme(Theme.of(context).textTheme).apply(
           bodyColor: Colors.white,
           displayColor: Colors.white,
         ),
-        useMaterial3: true,
       ),
       routerConfig: router,
       debugShowCheckedModeBanner: false,

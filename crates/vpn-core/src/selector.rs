@@ -73,74 +73,85 @@ impl ProtocolSelector {
         }
     }
 
-    /// Primary entry point for selecting a protocol for a new connection
-    pub fn select_best_protocol(&self, context: &SelectionContext) -> VpnProtocol {
-        tracing::info!("Selecting protocol for context: {:?}", context);
+    /// Returns the explicit 4-level connection cascade sequence
+    /// Level 1: WireGuard P2P (Performance)
+    /// Level 2: Hysteria2 P2P (Turbo/Mobile stability)
+    /// Level 3: Shadowsocks P2P (Bypass DPI/Symmetric NAT)
+    /// Level 4: Fallback handled by `FallbackManager` if all above fail
+    pub fn build_connection_cascade(&self, context: &SelectionContext, symmetric_nat: bool) -> Vec<VpnProtocol> {
+        tracing::info!("Building protocol cascade for context: {:?}", context);
+        let mut cascade = Vec::new();
 
-        // 1. High-priority censorship check
+        // Level 1 & 2: UDP Based P2P (WireGuard & Hysteria2)
+        // If NAT is symmetric, P2P UDP is almost impossible, skip to TCP
+        if !symmetric_nat {
+            // Check for censorship
+            if self.is_censored_country(&context.user_country) {
+                // In censored countries, regular WG is blocked, try Obfuscated then Hysteria
+                cascade.push(VpnProtocol::WireGuardObfuscated);
+                cascade.push(VpnProtocol::Hysteria2);
+            } else {
+                cascade.push(VpnProtocol::WireGuard);
+                cascade.push(VpnProtocol::Hysteria2);
+            }
+        } else {
+            tracing::info!("Symmetric NAT detected, skipping UDP P2P (WG/H2) directly to TCP/Shadowsocks");
+        }
+
+        // Level 3: TCP Based P2P (Shadowsocks / Trojan)
+        let level = self.censorship_level(&context.user_country);
+        if level >= CensorshipLevel::High {
+            cascade.push(VpnProtocol::Trojan);
+            cascade.push(VpnProtocol::VLESS);
+        } else {
+            cascade.push(VpnProtocol::Shadowsocks);
+        }
+
+        // Level 4: Fallback is handled implicitly when the cascade array is exhausted
+        // Return the sequence to attempt
+        cascade
+    }
+
+    /// Primary entry point for selecting a protocol for a single connection (Legacy)
+    pub fn select_best_protocol(&self, context: &SelectionContext) -> VpnProtocol {
+        tracing::info!("Selecting single protocol for context (Legacy): {:?}", context);
+
         if self.is_censored_country(&context.user_country) {
             let level = self.censorship_level(&context.user_country);
             return self.select_anti_censorship_protocol(level);
         }
 
-        // 2. Battery-saving check for mobile
         if context.device_type == DeviceType::Mobile {
             if let Some(battery) = context.battery_level {
                 if battery < 0.20 {
-                    tracing::info!("Low battery detected, using IKEv2 (battery efficient)");
                     return VpnProtocol::IKEv2;
                 }
             }
         }
 
-        // 3. Lossy networks (packet loss > 5%)
         if context.network_quality.packet_loss > 0.05 {
-            tracing::info!("Unstable network detected, using Hysteria2 (QUIC-based resilience)");
             return VpnProtocol::Hysteria2;
         }
 
-        // 4. Restricted environments
         if context.firewall_profile == FirewallProfile::Corporate {
-            tracing::info!("Corporate firewall detected, using OpenVPN TCP/443 (Firewall bypass)");
             return VpnProtocol::OpenVpnTcp;
         }
 
-        // 5. Explicit user intent
         match context.use_case {
-            UseCase::Gaming => {
-                tracing::info!("Gaming mode, using WireGuard (Lowest latency)");
-                return VpnProtocol::WireGuard;
-            }
-            UseCase::Privacy => {
-                tracing::info!("Privacy mode, using WireGuard Obfuscated");
-                return VpnProtocol::WireGuardObfuscated;
-            }
+            UseCase::Gaming => return VpnProtocol::WireGuard,
+            UseCase::Privacy => return VpnProtocol::WireGuardObfuscated,
             _ => {}
         }
 
-        // Default: High-performance WireGuard
-        tracing::info!("Standard configuration, defaulting to WireGuard");
         VpnProtocol::WireGuard
     }
 
     fn select_anti_censorship_protocol(&self, level: CensorshipLevel) -> VpnProtocol {
         match level {
-            CensorshipLevel::None | CensorshipLevel::Low => {
-                tracing::info!("Low censorship, using Shadowsocks");
-                VpnProtocol::Shadowsocks
-            }
-            CensorshipLevel::Medium => {
-                tracing::info!("Medium censorship, using WireGuard Obfuscated");
-                VpnProtocol::WireGuardObfuscated
-            }
-            CensorshipLevel::High => {
-                tracing::info!("High censorship, using Trojan");
-                VpnProtocol::Trojan
-            }
-            CensorshipLevel::Extreme => {
-                tracing::info!("Extreme censorship, using VLESS (ShadowTLS-like stealth)");
-                VpnProtocol::VLESS
-            }
+            CensorshipLevel::None | CensorshipLevel::Low => VpnProtocol::Shadowsocks,
+            CensorshipLevel::Medium => VpnProtocol::WireGuardObfuscated,
+            CensorshipLevel::High => VpnProtocol::Trojan,
+            CensorshipLevel::Extreme => VpnProtocol::VLESS,
         }
     }
 
@@ -384,5 +395,48 @@ mod tests {
 
         let protocol = selector.select_best_protocol(&context);
         assert_eq!(protocol, VpnProtocol::IKEv2);
+    }
+
+    #[test]
+    fn test_cascade_symmetric_nat() {
+        let selector = ProtocolSelector::new();
+        let context = SelectionContext {
+            network_quality: NetworkQuality {
+                latency_ms: 50, packet_loss: 0.0, bandwidth_mbps: 100.0, stability: 1.0,
+            },
+            firewall_profile: FirewallProfile::Open,
+            user_country: "US".to_string(),
+            device_type: DeviceType::Desktop,
+            battery_level: None,
+            use_case: UseCase::Browsing,
+        };
+
+        // When NAT is symmetric, we should skip UDP P2P (WG, H2)
+        let cascade = selector.build_connection_cascade(&context, true);
+        assert!(!cascade.contains(&VpnProtocol::WireGuard));
+        assert!(!cascade.contains(&VpnProtocol::Hysteria2));
+        assert!(cascade.contains(&VpnProtocol::Shadowsocks));
+    }
+
+    #[test]
+    fn test_cascade_censored_country() {
+        let selector = ProtocolSelector::new();
+        let context = SelectionContext {
+            network_quality: NetworkQuality {
+                latency_ms: 50, packet_loss: 0.0, bandwidth_mbps: 100.0, stability: 1.0,
+            },
+            firewall_profile: FirewallProfile::NationalCensorship,
+            user_country: "CN".to_string(),
+            device_type: DeviceType::Desktop,
+            battery_level: None,
+            use_case: UseCase::Browsing,
+        };
+
+        // In censored country, regular WG is replaced by Obfuscated or Trojan/VLESS depending on level
+        let cascade = selector.build_connection_cascade(&context, false);
+        assert!(!cascade.contains(&VpnProtocol::WireGuard));
+        assert!(cascade.contains(&VpnProtocol::WireGuardObfuscated));
+        assert!(cascade.contains(&VpnProtocol::Trojan));
+        assert!(cascade.contains(&VpnProtocol::VLESS));
     }
 }

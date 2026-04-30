@@ -10,11 +10,11 @@ use tracing_subscriber::EnvFilter;
 use vpn_core::{
     crypto::SecretKey,
     selector::{ProtocolSelector, SelectionContext, NetworkQuality, FirewallProfile, DeviceType, UseCase},
-    tunnel::{ConnectionConfig, Credentials},
+    tunnel::{ConnectionConfig, Credentials, VpnTunnel},
+    protocol::VpnProtocol,
     wireguard::WireGuardTunnel,
     openvpn::OpenVpnTunnel,
     mock::MockTunnel,
-    VpnProtocol, VpnTunnel,
 };
 
 #[derive(Parser)]
@@ -181,7 +181,7 @@ async fn main() -> anyhow::Result<()> {
             let mut tunnel: Box<dyn VpnTunnel> = match protocol {
                 VpnProtocol::Shadowsocks => Box::new(vpn_core::shadowsocks::ShadowsocksTunnel::new()),
                 VpnProtocol::WireGuard | VpnProtocol::WireGuardObfuscated => Box::new(WireGuardTunnel::new()),
-                VpnProtocol::OpenVpnTcp | VpnProtocol::OpenVpnUdp => Box::new(vpn_core::openvpn::OpenVpnTunnel::new()),
+                VpnProtocol::OpenVpnTcp | VpnProtocol::OpenVpnUdp => Box::new(OpenVpnTunnel::new()),
                 VpnProtocol::IKEv2 => Box::new(vpn_core::ikev2::IKEv2Tunnel::new()),
                 VpnProtocol::Hysteria2 => Box::new(vpn_core::hysteria::HysteriaTunnel::new()),
                 VpnProtocol::Trojan => Box::new(vpn_core::v2ray::V2RayTunnel::new(VpnProtocol::Trojan)),

@@ -1,0 +1,17 @@
+services:
+  - type: web
+    name: worldvpn-backend
+    env: docker
+    dockerfilePath: backend/server/Dockerfile
+    context: .
+    plan: free
+    envVars:
+      - key: DATABASE_URL
+        sync: false
+      - key: JWT_SECRET
+        generateValue: true
+      - key: USE_TLS
+        value: "false"
+      - key: PORT
+        value: "3000"
+    healthCheckPath: /health
