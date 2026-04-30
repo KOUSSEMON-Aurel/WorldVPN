@@ -1,0 +1,9 @@
+/target
+**/target/
+/frontend/worldvpn-mobile/build
+/frontend/worldvpn-mobile/.dart_tool
+/frontend/worldvpn-mobile/.pub-cache
+/backend/server/target
+/crates/*/target
+.git
+.env
