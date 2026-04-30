@@ -3,11 +3,15 @@ FROM rust:1.75-bookworm as builder
 
 WORKDIR /usr/src/worldvpn
 
+# Install build dependencies early for better caching
+RUN apt-get update && apt-get install -y pkg-config libssl-dev && rm -rf /var/lib/apt/lists/*
+
 # Copy the entire workspace to handle path dependencies
 COPY . .
 
 # Build the backend server in release mode
-RUN cargo build --release -p vpn-server
+# Limit parallel jobs to 1 to prevent OOM on Render free tier (512MB RAM)
+RUN CARGO_BUILD_JOBS=1 cargo build --release -p vpn-server
 
 # Runtime stage
 FROM debian:bookworm-slim
