@@ -3,7 +3,7 @@ services:
     name: worldvpn-backend
     env: docker
     dockerfilePath: backend/server/Dockerfile
-    context: .
+    dockerContext: .
     plan: free
     envVars:
       - key: DATABASE_URL
