@@ -7,6 +7,7 @@ use crate::protocol::VpnProtocol;
 use serde::{Deserialize, Serialize};
 
 /// Client API
+#[derive(Clone)]
 pub struct VpnApiClient {
     base_url: String,
     client: reqwest::Client,
@@ -15,12 +16,19 @@ pub struct VpnApiClient {
 #[derive(Serialize)]
 struct ConnectRequest {
     protocol: VpnProtocol,
-    username: String,
     public_key: Option<String>,
+    preferred_country: Option<String>,
 }
 
-/// Response de connexion VPN
 #[derive(Deserialize, Debug)]
+pub struct BalanceResponse {
+    pub credits: i64,
+}
+
+
+
+/// Response de connexion VPN
+#[derive(Deserialize, Serialize, Debug)]
 pub struct ConnectionInfo {
     pub session_id: String,
     pub server_endpoint: String,
@@ -45,13 +53,14 @@ impl VpnApiClient {
         }
     }
 
-    /// Login et récupération du JWT
-    pub async fn login(&self, username: String, password: String) -> Result<LoginResponse> {
-        let url = format!("{}/auth/login", self.base_url);
+    /// Login anonyme (V2) via clé publique Ed25519 et signature (Proof of Work/Identity)
+    pub async fn login_with_identity(&self, public_key: String, signature: String, timestamp: String) -> Result<LoginResponse> {
+        let url = format!("{}/auth/identity", self.base_url);
         
         let payload = serde_json::json!({
-            "username": username,
-            "password": password,
+            "public_key": public_key,
+            "signature": signature,
+            "timestamp": timestamp,
         });
 
         let response = self.client
@@ -78,16 +87,16 @@ impl VpnApiClient {
     pub async fn connect(
         &self,
         protocol: VpnProtocol,
-        username: String,
         public_key: Option<String>,
-        token: &str, // JWT token
+        preferred_country: Option<String>,
+        token: &str,
     ) -> Result<ConnectionInfo> {
         let url = format!("{}/vpn/connect", self.base_url);
         
         let payload = ConnectRequest {
             protocol,
-            username,
             public_key,
+            preferred_country,
         };
 
         let response = self.client
@@ -110,4 +119,121 @@ impl VpnApiClient {
 
         Ok(info)
     }
+
+    /// Enregistre ce terminal comme nœud de partage sur le réseau
+    pub async fn register_node(
+        &self,
+        token: &str,
+        country_code: &str,
+        city: Option<String>,
+        nat_type: String,
+        public_endpoint: Option<String>,
+        protocols: Vec<String>,
+    ) -> Result<String> {
+        let url = format!("{}/nodes/register", self.base_url);
+        
+        let payload = serde_json::json!({
+            "country_code": country_code,
+            "city": city,
+            "nat_type": Some(nat_type),
+            "public_endpoint": public_endpoint,
+            "protocols": protocols,
+            "available_bandwidth_mbps": 50,
+        });
+
+        let response = self.client
+            .post(&url)
+            .header("Authorization", format!("Bearer {}", token))
+            .json(&payload)
+            .send()
+            .await
+            .map_err(|e| VpnError::ConnectionFailed(format!("Registration failed: {}", e)))?;
+
+        if !response.status().is_success() {
+            let status = response.status();
+            let err = response.text().await.unwrap_or_default();
+            return Err(VpnError::ConnectionFailed(format!("Registration error ({}): {}", status, err)));
+        }
+
+        let data: serde_json::Value = response.json().await
+            .map_err(|e| VpnError::Internal(format!("Invalid registration response: {}", e)))?;
+        
+        let node_id = data["node_id"].as_str().ok_or_else(|| VpnError::Internal("Missing node_id".into()))?;
+        
+        Ok(node_id.to_string())
+    }
+
+    /// Envoie un heartbeat pour maintenir le nœud en ligne et mettre à jour ses métadonnées P2P
+    pub async fn heartbeat(
+        &self,
+        token: &str,
+        nat_type: Option<String>,
+        current_connections: Option<i32>,
+        public_endpoint: Option<String>,
+    ) -> Result<()> {
+        let url = format!("{}/nodes/heartbeat", self.base_url);
+        
+        let payload = serde_json::json!({
+            "nat_type": nat_type,
+            "current_connections": current_connections,
+            "public_endpoint": public_endpoint,
+        });
+
+        let response = self.client
+            .post(&url)
+            .header("Authorization", format!("Bearer {}", token))
+            .json(&payload)
+            .send()
+            .await
+            .map_err(|e| VpnError::ConnectionFailed(format!("Heartbeat failed: {}", e)))?;
+
+        if !response.status().is_success() {
+            return Err(VpnError::ConnectionFailed(format!("Heartbeat error: {}", response.status())));
+        }
+
+        Ok(())
+    }
+
+    /// Récupère la liste des nœuds publics (VPNGate) optimisés par le serveur
+    pub async fn fetch_public_nodes(&self) -> Result<serde_json::Value> {
+        let url = format!("{}/nodes/public", self.base_url);
+        
+        let response = self.client
+            .get(&url)
+            .send()
+            .await
+            .map_err(|e| VpnError::ConnectionFailed(format!("Public nodes fetch failed: {}", e)))?;
+
+        if !response.status().is_success() {
+            return Err(VpnError::ConnectionFailed(format!("Public nodes error: {}", response.status())));
+        }
+
+        let nodes = response
+            .json::<serde_json::Value>()
+            .await
+            .map_err(|e| VpnError::Internal(format!("Invalid public nodes response: {}", e)))?;
+
+        Ok(nodes)
+    }
+
+    pub async fn fetch_balance(&self, token: &str) -> Result<i64> {
+        let url = format!("{}/credits/balance", self.base_url);
+        let resp = self.client
+            .get(&url)
+            .header("Authorization", format!("Bearer {}", token))
+            .send()
+            .await
+            .map_err(|e| VpnError::ConnectionFailed(format!("Balance fetch failed: {}", e)))?;
+
+        if !resp.status().is_success() {
+            return Ok(0);
+        }
+
+        let bal = resp
+            .json::<BalanceResponse>()
+            .await
+            .map_err(|e| VpnError::Internal(format!("Invalid balance response: {}", e)))?;
+        Ok(bal.credits)
+    }
 }
+

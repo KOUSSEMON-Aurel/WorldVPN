@@ -29,6 +29,24 @@ pub enum VpnError {
     #[error("Protocol specific error: {0}")]
     ProtocolError(String),
 
+    #[error("STUN protocol error: {0}")]
+    StunError(String),
+
+    #[error("P2P error: {0}")]
+    P2pError(String),
+
     #[error("Abuse detection triggered: {0}")]
     AbuseDetected(String),
+}
+
+impl From<libp2p::swarm::ConnectionDenied> for VpnError {
+    fn from(err: libp2p::swarm::ConnectionDenied) -> Self {
+        VpnError::P2pError(err.to_string())
+    }
+}
+
+impl From<stun::Error> for VpnError {
+    fn from(err: stun::Error) -> Self {
+        VpnError::StunError(err.to_string())
+    }
 }

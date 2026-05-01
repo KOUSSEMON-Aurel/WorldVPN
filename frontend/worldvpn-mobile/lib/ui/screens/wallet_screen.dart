@@ -1,11 +1,15 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:lucide_icons/lucide_icons.dart';
+import '../../store/wallet_provider.dart';
 
-class WalletScreen extends StatelessWidget {
+class WalletScreen extends ConsumerWidget {
   const WalletScreen({super.key});
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
+    final balance = ref.watch(walletBalanceProvider);
+
     return Scaffold(
       backgroundColor: Colors.transparent,
       body: SafeArea(
@@ -14,7 +18,8 @@ class WalletScreen extends StatelessWidget {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              const Text("My Wallet", style: TextStyle(fontSize: 24, fontWeight: FontWeight.bold)),
+              const Text("My Wallet",
+                  style: TextStyle(fontSize: 24, fontWeight: FontWeight.bold)),
               const SizedBox(height: 24),
               // Balance Card
               Container(
@@ -22,14 +27,20 @@ class WalletScreen extends StatelessWidget {
                 padding: const EdgeInsets.all(24),
                 decoration: BoxDecoration(
                   gradient: LinearGradient(
-                    colors: [Theme.of(context).colorScheme.primary, Theme.of(context).colorScheme.secondary],
+                    colors: [
+                      Theme.of(context).colorScheme.primary,
+                      Theme.of(context).colorScheme.secondary
+                    ],
                     begin: Alignment.topLeft,
                     end: Alignment.bottomRight,
                   ),
                   borderRadius: BorderRadius.circular(24),
                   boxShadow: [
                     BoxShadow(
-                      color: Theme.of(context).colorScheme.primary.withValues(alpha: 0.3),
+                      color: Theme.of(context)
+                          .colorScheme
+                          .primary
+                          .withValues(alpha: 0.3),
                       blurRadius: 20,
                       offset: const Offset(0, 10),
                     ),
@@ -38,13 +49,20 @@ class WalletScreen extends StatelessWidget {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    const Text("Total Balance", style: TextStyle(color: Colors.white70, fontSize: 14)),
+                    const Text("Total Balance",
+                        style: TextStyle(color: Colors.white70, fontSize: 14)),
                     const SizedBox(height: 8),
-                    const Row(
+                    Row(
                       children: [
-                        Icon(LucideIcons.wallet, color: Colors.white, size: 24),
-                        SizedBox(width: 12),
-                        Text("1,250 CR", style: TextStyle(color: Colors.white, fontSize: 32, fontWeight: FontWeight.bold, fontFamily: 'monospace')),
+                        const Icon(LucideIcons.wallet,
+                            color: Colors.white, size: 24),
+                        const SizedBox(width: 12),
+                        Text("$balance CR",
+                            style: const TextStyle(
+                                color: Colors.white,
+                                fontSize: 32,
+                                fontWeight: FontWeight.bold,
+                                fontFamily: 'monospace')),
                       ],
                     ),
                     const SizedBox(height: 24),
@@ -53,22 +71,33 @@ class WalletScreen extends StatelessWidget {
                       style: ElevatedButton.styleFrom(
                         backgroundColor: Colors.white,
                         foregroundColor: Colors.black,
-                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                        shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(12)),
                       ),
-                      child: const Text("Top Up Credits", style: TextStyle(fontWeight: FontWeight.bold)),
+                      child: const Text("Top Up Credits",
+                          style: TextStyle(fontWeight: FontWeight.bold)),
                     ),
                   ],
                 ),
               ),
               const SizedBox(height: 32),
-              const Text("Recent Transactions", style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+              const Text("Recent Transactions",
+                  style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
               const SizedBox(height: 16),
               Expanded(
                 child: ListView(
                   children: [
-                    _buildTransactionItem("Node Connection (JP-Tokyo)", "- 5 CR", DateTime.now().subtract(const Duration(minutes: 45))),
-                    _buildTransactionItem("Node Connection (US-East)", "- 12 CR", DateTime.now().subtract(const Duration(hours: 4))),
-                    _buildTransactionItem("Top Up", "+ 500 CR", DateTime.now().subtract(const Duration(days: 1)), isCredit: true),
+                    _buildTransactionItem(
+                        "Node Connection (JP-Tokyo)",
+                        "- 5 CR",
+                        DateTime.now().subtract(const Duration(minutes: 45))),
+                    _buildTransactionItem(
+                        "Node Connection (US-East)",
+                        "- 12 CR",
+                        DateTime.now().subtract(const Duration(hours: 4))),
+                    _buildTransactionItem("Top Up", "+ 500 CR",
+                        DateTime.now().subtract(const Duration(days: 1)),
+                        isCredit: true),
                   ],
                 ),
               ),
@@ -79,7 +108,8 @@ class WalletScreen extends StatelessWidget {
     );
   }
 
-  Widget _buildTransactionItem(String title, String amount, DateTime date, {bool isCredit = false}) {
+  Widget _buildTransactionItem(String title, String amount, DateTime date,
+      {bool isCredit = false}) {
     return Container(
       margin: const EdgeInsets.only(bottom: 12),
       padding: const EdgeInsets.all(16),
@@ -96,7 +126,9 @@ class WalletScreen extends StatelessWidget {
                 Container(
                   padding: const EdgeInsets.all(10),
                   decoration: BoxDecoration(
-                    color: isCredit ? Colors.green.withValues(alpha: 0.2) : Colors.red.withValues(alpha: 0.2),
+                    color: isCredit
+                        ? Colors.green.withValues(alpha: 0.2)
+                        : Colors.red.withValues(alpha: 0.2),
                     shape: BoxShape.circle,
                   ),
                   child: Icon(
@@ -110,10 +142,13 @@ class WalletScreen extends StatelessWidget {
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Text(title, style: const TextStyle(fontWeight: FontWeight.bold), overflow: TextOverflow.ellipsis),
+                      Text(title,
+                          style: const TextStyle(fontWeight: FontWeight.bold),
+                          overflow: TextOverflow.ellipsis),
                       Text(
                         "${date.day}/${date.month} ${date.hour}:${date.minute.toString().padLeft(2, '0')}",
-                        style: const TextStyle(color: Colors.grey, fontSize: 12),
+                        style:
+                            const TextStyle(color: Colors.grey, fontSize: 12),
                       ),
                     ],
                   ),

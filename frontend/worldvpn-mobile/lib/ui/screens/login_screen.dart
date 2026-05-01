@@ -1,6 +1,8 @@
+import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 import 'package:lucide_icons/lucide_icons.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import '../../rust_gen/api/simple.dart' as rust;
 
 class LoginScreen extends StatefulWidget {
@@ -11,22 +13,26 @@ class LoginScreen extends StatefulWidget {
 }
 
 class _LoginScreenState extends State<LoginScreen> {
-  final _usernameController = TextEditingController();
-  final _passwordController = TextEditingController();
-
   bool _isLoading = false;
 
-  void _handleLogin() async {
-    final username = _usernameController.text.trim();
-    final password = _passwordController.text.trim();
-
-    if (username.isEmpty || password.isEmpty) return;
-
+  Future<void> _handleConnect() async {
     setState(() => _isLoading = true);
 
     try {
-      // Calling Real Rust Bridge
-      await rust.loginUser(username: username, password: password);
+      final prefs = await SharedPreferences.getInstance();
+      String? keyBase64 = prefs.getString('identity_key');
+      List<int> privateKeyBytes;
+
+      if (keyBase64 == null) {
+        // Generate new identity
+        privateKeyBytes = await rust.generateIdentity();
+        prefs.setString('identity_key', base64Encode(privateKeyBytes));
+      } else {
+        privateKeyBytes = base64Decode(keyBase64);
+      }
+
+      // Anonymous Auth Flow via Rust
+      await rust.loginAnonymously(privateKeyBytes: privateKeyBytes);
 
       if (mounted) {
         context.go('/home');
@@ -35,7 +41,9 @@ class _LoginScreenState extends State<LoginScreen> {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-              content: Text("LOGIN FAILED: $e"), backgroundColor: Colors.red),
+            content: Text("AUTHENTICATION FAILED: $e"),
+            backgroundColor: Colors.red,
+          ),
         );
       }
     } finally {
@@ -45,26 +53,16 @@ class _LoginScreenState extends State<LoginScreen> {
     }
   }
 
-  void _handleGuestLogin() async {
-    setState(() => _isLoading = true);
-    try {
-      // Use Guest credentials for Rust side
-      await rust.loginUser(username: "Guest", password: "nop");
-      if (mounted) {
-        context.go('/home');
-      }
-    } catch (e) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-              content: Text("GUEST LOGIN FAILED: $e"),
-              backgroundColor: Colors.red),
-        );
-      }
-    } finally {
-      if (mounted) {
-        setState(() => _isLoading = false);
-      }
+  void _handleResetIdentity() async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.remove('identity_key');
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text("Identity Key Reset."),
+          backgroundColor: Colors.green,
+        ),
+      );
     }
   }
 
@@ -73,7 +71,6 @@ class _LoginScreenState extends State<LoginScreen> {
     return Scaffold(
       body: Stack(
         children: [
-          // Background Glow
           Positioned.fill(
             child: Container(
               decoration: const BoxDecoration(
@@ -81,21 +78,19 @@ class _LoginScreenState extends State<LoginScreen> {
                   center: Alignment.center,
                   radius: 0.8,
                   colors: [
-                    Color(0x3300F2EA), // Cyan low opacity
+                    Color(0x3300F2EA),
                     Color(0xFF0A0F1C),
                   ],
                 ),
               ),
             ),
           ),
-
           Center(
             child: SingleChildScrollView(
               padding: const EdgeInsets.all(32),
               child: Column(
                 mainAxisAlignment: MainAxisAlignment.center,
                 children: [
-                  // Logo Shield
                   Container(
                     width: 100,
                     height: 100,
@@ -103,8 +98,7 @@ class _LoginScreenState extends State<LoginScreen> {
                       color: const Color(0xFF00F2EA).withValues(alpha: 0.1),
                       borderRadius: BorderRadius.circular(24),
                       border: Border.all(
-                          color:
-                              const Color(0xFF00F2EA).withValues(alpha: 0.3)),
+                          color: const Color(0xFF00F2EA).withValues(alpha: 0.3)),
                       boxShadow: [
                         BoxShadow(
                           color: const Color(0xFF00F2EA).withValues(alpha: 0.2),
@@ -117,7 +111,6 @@ class _LoginScreenState extends State<LoginScreen> {
                         size: 48, color: Color(0xFF00F2EA)),
                   ),
                   const SizedBox(height: 32),
-
                   const Text(
                     "WorldVPN",
                     style: TextStyle(
@@ -126,75 +119,18 @@ class _LoginScreenState extends State<LoginScreen> {
                         letterSpacing: -1),
                   ),
                   Text(
-                    "Decentralized Secure Perimeter",
+                    "Decentralized Anonymous Network",
                     style: TextStyle(
                         color: Colors.white.withValues(alpha: 0.5),
                         fontSize: 12,
                         fontFamily: 'monospace'),
                   ),
-
-                  const SizedBox(height: 48),
-
-                  // Username
-                  TextField(
-                    controller: _usernameController,
-                    style: const TextStyle(fontFamily: 'monospace'),
-                    decoration: InputDecoration(
-                      labelText: "IDENTITY",
-                      labelStyle: const TextStyle(
-                          fontSize: 10,
-                          letterSpacing: 2,
-                          fontWeight: FontWeight.bold),
-                      filled: true,
-                      fillColor: Colors.white.withValues(alpha: 0.05),
-                      border: OutlineInputBorder(
-                        borderRadius: BorderRadius.circular(12),
-                        borderSide: BorderSide(
-                            color: Colors.white.withValues(alpha: 0.1)),
-                      ),
-                      enabledBorder: OutlineInputBorder(
-                        borderRadius: BorderRadius.circular(12),
-                        borderSide: BorderSide(
-                            color: Colors.white.withValues(alpha: 0.1)),
-                      ),
-                    ),
-                  ),
-
-                  const SizedBox(height: 16),
-
-                  // Password
-                  TextField(
-                    controller: _passwordController,
-                    obscureText: true,
-                    decoration: InputDecoration(
-                      labelText: "ACCESS KEY",
-                      labelStyle: const TextStyle(
-                          fontSize: 10,
-                          letterSpacing: 2,
-                          fontWeight: FontWeight.bold),
-                      filled: true,
-                      fillColor: Colors.white.withValues(alpha: 0.05),
-                      border: OutlineInputBorder(
-                        borderRadius: BorderRadius.circular(12),
-                        borderSide: BorderSide(
-                            color: Colors.white.withValues(alpha: 0.1)),
-                      ),
-                      enabledBorder: OutlineInputBorder(
-                        borderRadius: BorderRadius.circular(12),
-                        borderSide: BorderSide(
-                            color: Colors.white.withValues(alpha: 0.1)),
-                      ),
-                    ),
-                  ),
-
-                  const SizedBox(height: 32),
-
-                  // Button
+                  const SizedBox(height: 64),
                   SizedBox(
                     width: double.infinity,
                     height: 56,
                     child: ElevatedButton(
-                      onPressed: _isLoading ? null : _handleLogin,
+                      onPressed: _isLoading ? null : _handleConnect,
                       style: ElevatedButton.styleFrom(
                         backgroundColor: const Color(0xFF00F2EA),
                         foregroundColor: Colors.black,
@@ -211,21 +147,18 @@ class _LoginScreenState extends State<LoginScreen> {
                               child: CircularProgressIndicator(
                                   color: Colors.black, strokeWidth: 2))
                           : const Text(
-                              "INITIALIZE SESSION",
+                              "CONNECT ANONYMOUSLY",
                               style: TextStyle(
                                   fontWeight: FontWeight.bold,
                                   letterSpacing: 1),
                             ),
                     ),
                   ),
-
                   const SizedBox(height: 16),
-
-                  // Guest Button
                   TextButton(
-                    onPressed: _isLoading ? null : _handleGuestLogin,
+                    onPressed: _isLoading ? null : _handleResetIdentity,
                     child: const Text(
-                      "CONTINUE AS GUEST",
+                      "RESET IDENTITY KEY",
                       style: TextStyle(
                           color: Colors.white70,
                           fontWeight: FontWeight.bold,

@@ -51,19 +51,83 @@ impl NatTraversal {
     /// Crucial for deciding if UDP Hole Punching is feasible.
     pub async fn detect_nat_type(&self) -> Result<NatType> {
         tracing::info!("Detecting NAT type using STUN...");
-        // FIXME: Real implementation using STUN RFC 3489 / RFC 5389
-        // 1. Send request to STUN Server 1
-        // 2. Send request to STUN Server 2
-        // 3. If mapped ip/port differ -> Symmetric NAT
         
-        let symmetric_simulated = false; // Scaffolding
-        
-        if symmetric_simulated {
-            tracing::warn!("Symmetric NAT detected! UDP Hole Punching will likely fail.");
+        let mut mapped_addresses = Vec::new();
+
+        for server in &self.config.stun_servers {
+            match self.get_mapped_address(server).await {
+                Ok(addr) => {
+                    tracing::info!("STUN Server {}: Mapped Address is {:?}", server, addr);
+                    mapped_addresses.push(addr);
+                }
+                Err(e) => {
+                    tracing::warn!("STUN Server {} failed: {}", server, e);
+                }
+            }
+        }
+
+        if mapped_addresses.is_empty() {
+            return Ok(NatType::Unknown);
+        }
+
+        // Basic heuristic: if the mapped port changes between servers, it's likely Symmetric
+        let first = mapped_addresses[0];
+        let is_symmetric = mapped_addresses.iter().any(|&addr| addr.port() != first.port());
+
+        if is_symmetric {
+            tracing::warn!("Symmetric NAT detected! P2P will require Hysteria2/TCP or Relay.");
             Ok(NatType::Symmetric)
         } else {
+            // For now, simplify Cone types to PortRestrictedCone (most common behavior)
             Ok(NatType::PortRestrictedCone)
         }
+    }
+
+    /// Returns a single public endpoint (SocketAddr) for signaling.
+    pub async fn get_public_endpoint(&self) -> Result<SocketAddr> {
+        // Try the first working STUN server
+        for server in &self.config.stun_servers {
+            if let Ok(addr) = self.get_mapped_address(server).await {
+                return Ok(addr);
+            }
+        }
+        Err(VpnError::NatTraversalFailed("Could not discover public endpoint from any STUN server".into()))
+    }
+
+    async fn get_mapped_address(&self, server_url: &str) -> Result<SocketAddr> {
+        use stun::message::*;
+        use stun::agent::*;
+        use tokio::net::UdpSocket;
+
+        let socket = UdpSocket::bind("0.0.0.0:0").await?;
+        socket.connect(server_url).await?;
+
+        let mut msg = Message::new();
+        msg.build(&[
+            Box::new(TransactionId::default()),
+            Box::new(BINDING_REQUEST),
+        ])?;
+
+        socket.send(&msg.marshal_binary()?).await?;
+
+        let mut buf = [0u8; 1024];
+        let len = tokio::time::timeout(
+            std::time::Duration::from_millis(self.config.timeout_ms),
+            socket.recv(&mut buf)
+        ).await.map_err(|_| VpnError::ConnectionFailed("STUN Timeout".to_string()))??;
+
+        let mut response = Message::new();
+        response.unmarshal_binary(&buf[..len])?;
+
+        let mut mapped_addr = None;
+        
+        // Try XOR-MAPPED-ADDRESS first (RFC 5389)
+        let mut xor_addr = stun::xoraddr::XorMappedAddress::default();
+        if xor_addr.get_from(&response).is_ok() {
+            mapped_addr = Some(SocketAddr::new(xor_addr.ip, xor_addr.port));
+        }
+
+        mapped_addr.ok_or_else(|| VpnError::NatTraversalFailed("No mapped address in STUN response".to_string()))
     }
 
 

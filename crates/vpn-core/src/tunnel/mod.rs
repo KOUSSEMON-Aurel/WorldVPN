@@ -90,7 +90,7 @@ pub trait VpnTunnel: Send + Sync {
     /// Returns the latest performance statistics
     fn stats(&self) -> TunnelStats;
 
-    /// Triggers protocol-specific roaming (e.g., MOBIKE for IKEv2)
+    /// Triggers protocol-specific roaming (e.g., Mobike-like behavior for WireGuard)
     async fn handle_network_change(&mut self, _new_interface: Interface) -> Result<()> {
         Ok(())
     }

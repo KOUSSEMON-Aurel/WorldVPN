@@ -3,6 +3,7 @@ import 'package:lucide_icons/lucide_icons.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../store/vpn_provider.dart';
 import '../../store/settings_provider.dart';
+import '../../store/wallet_provider.dart';
 
 class HomeScreen extends ConsumerStatefulWidget {
   const HomeScreen({super.key});
@@ -162,13 +163,13 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
                   color: Colors.white.withValues(alpha: 0.05),
                   borderRadius: BorderRadius.circular(20),
                 ),
-                child: const Row(
+                child: Row(
                   children: [
-                    Icon(LucideIcons.wallet,
+                    const Icon(LucideIcons.wallet,
                         size: 12, color: Color(0xFF7000FF)),
-                    SizedBox(width: 6),
-                    Text("1,250 CR",
-                        style: TextStyle(
+                    const SizedBox(width: 6),
+                    Text("${ref.watch(walletBalanceProvider)} CR",
+                        style: const TextStyle(
                             fontFamily: 'monospace',
                             fontWeight: FontWeight.bold,
                             fontSize: 11)),
@@ -211,7 +212,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
               if (isConnected) {
                 ref.read(vpnControllerProvider).disconnect();
               } else {
-                ref.read(vpnControllerProvider).connect("Auto");
+                ref.read(vpnControllerProvider).connect(nodeGroup);
               }
             },
       child: AnimatedBuilder(

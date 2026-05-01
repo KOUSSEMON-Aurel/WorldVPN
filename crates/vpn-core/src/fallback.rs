@@ -45,26 +45,28 @@ impl FallbackManager {
 
     async fn get_warp_server(&self, _country: &str) -> Result<FallbackConfig> {
         tracing::info!("Fetching Cloudflare WARP fallback");
-        // FIXME: Implement Warp configuration generation logic (e.g. via wgcf logic)
-        // WARP uses WireGuard natively
+        
+        // Automated registration for Zero-Config experience
+        let warp_config = crate::warp::register_warp_device().await?;
+        
         Ok(FallbackConfig {
             provider: FallbackProvider::CloudflareWarp,
-            server_ip: "162.159.192.1".to_string(), // Common WARP endpoint
-            port: 2408,
+            server_ip: warp_config.endpoint.split(':').next().unwrap_or("162.159.193.1").to_string(),
+            port: warp_config.endpoint.split(':').nth(1).and_then(|p| p.parse().ok()).unwrap_or(2408),
             protocol: VpnProtocol::WireGuard,
-            credentials: None, // WARP keys are usually handled in a separate config
+            credentials: Some(warp_config.private_key), // We store the private key in credentials for the tunnel to use
         })
     }
 
     async fn get_vpngate_server(&self, country: &str) -> Result<FallbackConfig> {
         tracing::info!("Fetching VPNGate fallback for {}", country);
         // FIXME: Query Backend API for latest VPNGate servers
-        // VPNGate often uses OpenVPN over UDP/TCP
+        // VPNGate fallback will now prefer Shadowsocks for better anti-censorship
         Ok(FallbackConfig {
             provider: FallbackProvider::VpnGate,
             server_ip: "219.100.37.55".to_string(), // Fake IP for scaffolding
-            port: 1194,
-            protocol: VpnProtocol::OpenVpnUdp,
+            port: 8388,
+            protocol: VpnProtocol::Shadowsocks,
             credentials: None,
         })
     }
@@ -93,6 +95,6 @@ mod tests {
         
         // Should fallback to public (VPNGate)
         assert!(matches!(config.provider, FallbackProvider::VpnGate));
-        assert_eq!(config.protocol, VpnProtocol::OpenVpnUdp);
+        assert_eq!(config.protocol, VpnProtocol::Shadowsocks);
     }
 }

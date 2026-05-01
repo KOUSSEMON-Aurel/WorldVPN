@@ -124,7 +124,7 @@ impl ProtocolSelector {
         if context.device_type == DeviceType::Mobile {
             if let Some(battery) = context.battery_level {
                 if battery < 0.20 {
-                    return VpnProtocol::IKEv2;
+                    return VpnProtocol::WireGuard;
                 }
             }
         }
@@ -134,7 +134,7 @@ impl ProtocolSelector {
         }
 
         if context.firewall_profile == FirewallProfile::Corporate {
-            return VpnProtocol::OpenVpnTcp;
+            return VpnProtocol::Shadowsocks;
         }
 
         match context.use_case {
@@ -161,9 +161,6 @@ impl ProtocolSelector {
             VpnProtocol::WireGuard,
             VpnProtocol::WireGuardObfuscated,
             VpnProtocol::Shadowsocks,
-            VpnProtocol::OpenVpnTcp,
-            VpnProtocol::OpenVpnUdp,
-            VpnProtocol::IKEv2,
             VpnProtocol::Hysteria2,
             VpnProtocol::Trojan,
             VpnProtocol::VLESS,
@@ -192,7 +189,7 @@ impl ProtocolSelector {
 
         // Security baseline
         let security_score = match protocol {
-            VpnProtocol::WireGuard | VpnProtocol::IKEv2 => 1.0,
+            VpnProtocol::WireGuard => 1.0,
             VpnProtocol::Shadowsocks | VpnProtocol::Hysteria2 => 0.95,
             VpnProtocol::Trojan | VpnProtocol::VLESS => 0.98,
             _ => 0.9,
@@ -204,8 +201,7 @@ impl ProtocolSelector {
 
         // Energy efficiency
         let battery_score = match protocol {
-            VpnProtocol::IKEv2 => 1.0,
-            VpnProtocol::WireGuard => 0.95,
+            VpnProtocol::WireGuard => 1.0,
             VpnProtocol::Shadowsocks => 0.90,
             VpnProtocol::Hysteria2 => 0.85,
             _ => 0.80,
@@ -215,8 +211,6 @@ impl ProtocolSelector {
         // Reliability / Stability
         let stability_score = match protocol {
             VpnProtocol::Hysteria2 => 1.0,
-            VpnProtocol::IKEv2 => 0.95,
-            VpnProtocol::OpenVpnUdp => 0.85,
             VpnProtocol::WireGuard => 0.90,
             _ => 0.80,
         };
@@ -269,7 +263,7 @@ impl ProtocolSelector {
 
         // Penalize detectable protocols in censored countries
         if self.is_censored_country(&context.user_country) {
-            if matches!(protocol, VpnProtocol::WireGuard | VpnProtocol::OpenVpnUdp) {
+            if matches!(protocol, VpnProtocol::WireGuard) {
                 score *= 0.50; // Heavy penalty
             }
         }
@@ -323,8 +317,7 @@ impl ProtocolSelector {
 
         let battery = if context.device_type == DeviceType::Mobile {
             match protocol {
-                VpnProtocol::IKEv2 => 1.0,
-                VpnProtocol::WireGuard => 0.9,
+                VpnProtocol::WireGuard => 1.0,
                 VpnProtocol::Shadowsocks => 0.85,
                 _ => 0.7,
             }
@@ -394,7 +387,7 @@ mod tests {
         };
 
         let protocol = selector.select_best_protocol(&context);
-        assert_eq!(protocol, VpnProtocol::IKEv2);
+        assert_eq!(protocol, VpnProtocol::WireGuard);
     }
 
     #[test]

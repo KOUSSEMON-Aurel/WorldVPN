@@ -1,0 +1,17 @@
+[Unit]
+Description=WorldVPN Background P2P Daemon
+After=network.target
+
+[Service]
+ExecStart=/usr/local/bin/worldvpn-daemon --share --super-node --identity /etc/worldvpn/identity.der
+Restart=always
+User=root
+WorkingDirectory=/etc/worldvpn
+
+# Security sandboxing
+CapabilityBoundingSet=CAP_NET_ADMIN CAP_NET_RAW
+AmbientCapabilities=CAP_NET_ADMIN CAP_NET_RAW
+NoNewPrivileges=true
+
+[Install]
+WantedBy=multi-user.target

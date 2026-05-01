@@ -100,99 +100,102 @@ pub async fn login(
 }
 
 #[derive(Deserialize)]
-#[allow(dead_code)]
-pub struct RegisterRequest {
-    pub username: String,
-    pub password: String,
-    pub email: Option<String>,
+pub struct IdentityLoginRequest {
+    pub public_key: String,
+    pub signature: String,
+    pub timestamp: String,
 }
 
-#[derive(Serialize)]
-pub struct RegisterResponse {
-    pub user_id: String,
-    pub username: String,
-    pub message: String,
-}
-
-/// POST /auth/register
-pub async fn register(
+/// POST /auth/identity
+pub async fn identity_login(
     State(state): State<AppState>,
-    Json(payload): Json<RegisterRequest>,
+    Json(payload): Json<IdentityLoginRequest>,
 ) -> impl IntoResponse {
     let pool = state.db.as_ref().expect("DB non initialisée");
 
-    // Vérification unicité username
-    let existing = sqlx::query("SELECT id FROM users WHERE username = $1")
-        .bind(&payload.username)
+    // 1. Vérification de la signature
+    use vpn_core::crypto::IdentityKey;
+    if !IdentityKey::verify_signature(&payload.public_key, &payload.timestamp, &payload.signature) {
+        return (
+            StatusCode::UNAUTHORIZED,
+            Json(json!({"error": "Invalid signature"})),
+        )
+            .into_response();
+    }
+
+    // 2. Vérification de la fraîcheur du timestamp (anti-replay)
+    // On accepte une fenêtre de 5 minutes
+    let ts: i64 = payload.timestamp.parse().unwrap_or(0);
+    let now = chrono::Utc::now().timestamp();
+    if (now - ts).abs() > 300 {
+        return (
+            StatusCode::UNAUTHORIZED,
+            Json(json!({"error": "Challenge expired or invalid timestamp"})),
+        )
+            .into_response();
+    }
+
+    // 3. Recherche ou création de l'utilisateur anonyme
+    let user = sqlx::query("SELECT id FROM users WHERE ed25519_pubkey = $1")
+        .bind(&payload.public_key)
         .fetch_optional(pool)
         .await;
 
-    match existing {
-        Ok(Some(_)) => {
-            return (
-                StatusCode::CONFLICT,
-                Json(json!({"error": "Username already exists"})),
+    let user_id = match user {
+        Ok(Some(row)) => row.get::<String, _>("id"),
+        Ok(None) => {
+            // Création automatique pour les nouveaux anonymes
+            let new_id = uuid::Uuid::new_v4().to_string();
+            let res = sqlx::query(
+                "INSERT INTO users (id, ed25519_pubkey, credits) VALUES ($1, $2, $3)",
             )
-                .into_response()
+            .bind(&new_id)
+            .bind(&payload.public_key)
+            .bind(50) // 50 crédits pour les anonymes
+            .execute(pool)
+            .await;
+
+            if let Err(e) = res {
+                tracing::error!("Erreur création user anonyme: {:?}", e);
+                return (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(json!({"error": "Auto-registration failed"})),
+                )
+                    .into_response();
+            }
+            new_id
         }
         Err(e) => {
-            tracing::error!("Erreur DB check: {:?}", e);
+            tracing::error!("Erreur DB identity: {:?}", e);
             return (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 Json(json!({"error": "Database error"})),
             )
                 .into_response();
         }
-        Ok(None) => {}
-    }
-
-    // Hashage du mot de passe
-    let salt = password_hash::SaltString::generate(&mut argon2::password_hash::rand_core::OsRng);
-    let argon2 = argon2::Argon2::default();
-
-    let password_hash = match argon2::PasswordHasher::hash_password(
-        &argon2,
-        payload.password.as_bytes(),
-        &salt,
-    ) {
-        Ok(h) => h.to_string(),
-        Err(e) => {
-            tracing::error!("Erreur hashage: {}", e);
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({"error": "Encryption error"})),
-            )
-                .into_response();
-        }
     };
 
-    // Création de l'utilisateur
-    let user_id = uuid::Uuid::new_v4().to_string();
-    let res = sqlx::query(
-        "INSERT INTO users (id, username, password_hash, credits) VALUES ($1, $2, $3, $4)",
-    )
-    .bind(&user_id)
-    .bind(&payload.username)
-    .bind(&password_hash)
-    .bind(100) // 100 crédits de départ
-    .execute(pool)
-    .await;
+    // 4. Update last active
+    let _ = sqlx::query("UPDATE users SET last_active = CURRENT_TIMESTAMP WHERE id = $1")
+        .bind(&user_id)
+        .execute(pool)
+        .await;
 
-    match res {
-        Ok(_) => {
-            tracing::info!("✅ Nouvel utilisateur créé: {} ({})", payload.username, user_id);
-            let response = RegisterResponse {
-                user_id: user_id.clone(),
-                username: payload.username.clone(),
-                message: format!("Bienvenue {} ! Votre compte a été créé avec succès.", payload.username),
+    // 5. Génération du JWT
+    match create_jwt(user_id.clone(), payload.public_key.clone()) {
+        Ok(token) => {
+            let response = LoginResponse {
+                token,
+                user_id,
+                username: payload.public_key, // On utilise la pubkey comme username pour le JWT
             };
-            (StatusCode::CREATED, Json(response)).into_response()
+            (StatusCode::OK, Json(response)).into_response()
         }
         Err(e) => {
-            tracing::error!("Erreur création user: {:?}", e);
+            tracing::error!("Erreur JWT identity: {}", e);
             (
                 StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({"error": "User creation failed"})),
+                Json(json!({"error": "Token generation failed"})),
             )
                 .into_response()
         }

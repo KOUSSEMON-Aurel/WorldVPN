@@ -38,7 +38,7 @@ flutter_rust_bridge::frb_generated_boilerplate!(
     default_rust_auto_opaque = RustAutoOpaqueMoi,
 );
 pub(crate) const FLUTTER_RUST_BRIDGE_CODEGEN_VERSION: &str = "2.12.0";
-pub(crate) const FLUTTER_RUST_BRIDGE_CODEGEN_CONTENT_HASH: i32 = 1331370972;
+pub(crate) const FLUTTER_RUST_BRIDGE_CODEGEN_CONTENT_HASH: i32 = 1975717488;
 
 // Section: executor
 
@@ -46,6 +46,74 @@ flutter_rust_bridge::frb_generated_default_handler!();
 
 // Section: wire_funcs
 
+fn wire__crate__api__simple__generate_identity_impl(
+    port_: flutter_rust_bridge::for_generated::MessagePort,
+    ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
+    rust_vec_len_: i32,
+    data_len_: i32,
+) {
+    FLUTTER_RUST_BRIDGE_HANDLER.wrap_normal::<flutter_rust_bridge::for_generated::SseCodec, _, _>(
+        flutter_rust_bridge::for_generated::TaskInfo {
+            debug_name: "generate_identity",
+            port: Some(port_),
+            mode: flutter_rust_bridge::for_generated::FfiCallMode::Normal,
+        },
+        move || {
+            let message = unsafe {
+                flutter_rust_bridge::for_generated::Dart2RustMessageSse::from_wire(
+                    ptr_,
+                    rust_vec_len_,
+                    data_len_,
+                )
+            };
+            let mut deserializer =
+                flutter_rust_bridge::for_generated::SseDeserializer::new(message);
+            deserializer.end();
+            move |context| {
+                transform_result_sse::<_, flutter_rust_bridge::for_generated::anyhow::Error>(
+                    (move || {
+                        let output_ok = crate::api::simple::generate_identity()?;
+                        Ok(output_ok)
+                    })(),
+                )
+            }
+        },
+    )
+}
+fn wire__crate__api__simple__get_wallet_balance_impl(
+    port_: flutter_rust_bridge::for_generated::MessagePort,
+    ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
+    rust_vec_len_: i32,
+    data_len_: i32,
+) {
+    FLUTTER_RUST_BRIDGE_HANDLER.wrap_normal::<flutter_rust_bridge::for_generated::SseCodec, _, _>(
+        flutter_rust_bridge::for_generated::TaskInfo {
+            debug_name: "get_wallet_balance",
+            port: Some(port_),
+            mode: flutter_rust_bridge::for_generated::FfiCallMode::Normal,
+        },
+        move || {
+            let message = unsafe {
+                flutter_rust_bridge::for_generated::Dart2RustMessageSse::from_wire(
+                    ptr_,
+                    rust_vec_len_,
+                    data_len_,
+                )
+            };
+            let mut deserializer =
+                flutter_rust_bridge::for_generated::SseDeserializer::new(message);
+            deserializer.end();
+            move |context| {
+                transform_result_sse::<_, flutter_rust_bridge::for_generated::anyhow::Error>(
+                    (move || {
+                        let output_ok = crate::api::simple::get_wallet_balance()?;
+                        Ok(output_ok)
+                    })(),
+                )
+            }
+        },
+    )
+}
 fn wire__crate__api__simple__greet_impl(
     port_: flutter_rust_bridge::for_generated::MessagePort,
     ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
@@ -111,7 +179,7 @@ fn wire__crate__api__simple__is_sharing_impl(
         },
     )
 }
-fn wire__crate__api__simple__login_user_impl(
+fn wire__crate__api__simple__login_anonymously_impl(
     port_: flutter_rust_bridge::for_generated::MessagePort,
     ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
     rust_vec_len_: i32,
@@ -119,7 +187,7 @@ fn wire__crate__api__simple__login_user_impl(
 ) {
     FLUTTER_RUST_BRIDGE_HANDLER.wrap_normal::<flutter_rust_bridge::for_generated::SseCodec, _, _>(
         flutter_rust_bridge::for_generated::TaskInfo {
-            debug_name: "login_user",
+            debug_name: "login_anonymously",
             port: Some(port_),
             mode: flutter_rust_bridge::for_generated::FfiCallMode::Normal,
         },
@@ -133,13 +201,13 @@ fn wire__crate__api__simple__login_user_impl(
             };
             let mut deserializer =
                 flutter_rust_bridge::for_generated::SseDeserializer::new(message);
-            let api_username = <String>::sse_decode(&mut deserializer);
-            let api_password = <String>::sse_decode(&mut deserializer);
+            let api_private_key_bytes = <Vec<u8>>::sse_decode(&mut deserializer);
             deserializer.end();
             move |context| {
                 transform_result_sse::<_, flutter_rust_bridge::for_generated::anyhow::Error>(
                     (move || {
-                        let output_ok = crate::api::simple::login_user(api_username, api_password)?;
+                        let output_ok =
+                            crate::api::simple::login_anonymously(api_private_key_bytes)?;
                         Ok(output_ok)
                     })(),
                 )
@@ -254,7 +322,7 @@ fn wire__crate__api__simple__start_sharing_impl(
         },
     )
 }
-fn wire__crate__api__simple__start_vpn_connection_impl(
+fn wire__crate__api__simple__start_vpn_matchmaking_impl(
     port_: flutter_rust_bridge::for_generated::MessagePort,
     ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
     rust_vec_len_: i32,
@@ -262,7 +330,7 @@ fn wire__crate__api__simple__start_vpn_connection_impl(
 ) {
     FLUTTER_RUST_BRIDGE_HANDLER.wrap_normal::<flutter_rust_bridge::for_generated::SseCodec, _, _>(
         flutter_rust_bridge::for_generated::TaskInfo {
-            debug_name: "start_vpn_connection",
+            debug_name: "start_vpn_matchmaking",
             port: Some(port_),
             mode: flutter_rust_bridge::for_generated::FfiCallMode::Normal,
         },
@@ -278,13 +346,15 @@ fn wire__crate__api__simple__start_vpn_connection_impl(
                 flutter_rust_bridge::for_generated::SseDeserializer::new(message);
             let api_protocol_str = <String>::sse_decode(&mut deserializer);
             let api_country_code = <String>::sse_decode(&mut deserializer);
+            let api_node_group = <String>::sse_decode(&mut deserializer);
             deserializer.end();
             move |context| {
                 transform_result_sse::<_, flutter_rust_bridge::for_generated::anyhow::Error>(
                     (move || {
-                        let output_ok = crate::api::simple::start_vpn_connection(
+                        let output_ok = crate::api::simple::start_vpn_matchmaking(
                             api_protocol_str,
                             api_country_code,
+                            api_node_group,
                         )?;
                         Ok(output_ok)
                     })(),
@@ -404,6 +474,13 @@ impl SseDecode for f64 {
     }
 }
 
+impl SseDecode for i64 {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
+        deserializer.cursor.read_i64::<NativeEndian>().unwrap()
+    }
+}
+
 impl SseDecode for Vec<u8> {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
@@ -460,17 +537,21 @@ fn pde_ffi_dispatcher_primary_impl(
 ) {
     // Codec=Pde (Serialization + dispatch), see doc to use other codecs
     match func_id {
-        1 => wire__crate__api__simple__greet_impl(port, ptr, rust_vec_len, data_len),
-        2 => wire__crate__api__simple__is_sharing_impl(port, ptr, rust_vec_len, data_len),
-        3 => wire__crate__api__simple__login_user_impl(port, ptr, rust_vec_len, data_len),
-        4 => {
+        1 => wire__crate__api__simple__generate_identity_impl(port, ptr, rust_vec_len, data_len),
+        2 => wire__crate__api__simple__get_wallet_balance_impl(port, ptr, rust_vec_len, data_len),
+        3 => wire__crate__api__simple__greet_impl(port, ptr, rust_vec_len, data_len),
+        4 => wire__crate__api__simple__is_sharing_impl(port, ptr, rust_vec_len, data_len),
+        5 => wire__crate__api__simple__login_anonymously_impl(port, ptr, rust_vec_len, data_len),
+        6 => {
             wire__crate__api__simple__register_status_stream_impl(port, ptr, rust_vec_len, data_len)
         }
-        5 => wire__crate__api__simple__set_backend_url_impl(port, ptr, rust_vec_len, data_len),
-        6 => wire__crate__api__simple__start_sharing_impl(port, ptr, rust_vec_len, data_len),
-        7 => wire__crate__api__simple__start_vpn_connection_impl(port, ptr, rust_vec_len, data_len),
-        8 => wire__crate__api__simple__stop_sharing_impl(port, ptr, rust_vec_len, data_len),
-        9 => wire__crate__api__simple__stop_vpn_connection_impl(port, ptr, rust_vec_len, data_len),
+        7 => wire__crate__api__simple__set_backend_url_impl(port, ptr, rust_vec_len, data_len),
+        8 => wire__crate__api__simple__start_sharing_impl(port, ptr, rust_vec_len, data_len),
+        9 => {
+            wire__crate__api__simple__start_vpn_matchmaking_impl(port, ptr, rust_vec_len, data_len)
+        }
+        10 => wire__crate__api__simple__stop_sharing_impl(port, ptr, rust_vec_len, data_len),
+        11 => wire__crate__api__simple__stop_vpn_connection_impl(port, ptr, rust_vec_len, data_len),
         _ => unreachable!(),
     }
 }
@@ -547,6 +628,13 @@ impl SseEncode for f64 {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
         serializer.cursor.write_f64::<NativeEndian>(self).unwrap();
+    }
+}
+
+impl SseEncode for i64 {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
+        serializer.cursor.write_i64::<NativeEndian>(self).unwrap();
     }
 }
 
