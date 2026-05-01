@@ -137,6 +137,99 @@ impl IdentityKey {
         use ed25519_dalek::Verifier;
         vk.verify(message.as_bytes(), &signature).is_ok()
     }
+
+    /// Convertit la clé publique Ed25519 en clé publique X25519 (Curve25519)
+    pub fn public_key_to_x25519(public_key_hex: &str) -> Result<[u8; 32]> {
+        let pub_key_bytes = public_key_hex.strip_prefix("ed25519:")
+            .ok_or_else(|| VpnError::CryptoError("Prefix ed25519: manquant".into()))?;
+        let bytes = hex::decode(pub_key_bytes)
+            .map_err(|_| VpnError::CryptoError("Hex invalide".into()))?;
+        
+        let ed_verifying_key = ed25519_dalek::VerifyingKey::from_bytes(bytes.as_slice().try_into().map_err(|_| VpnError::CryptoError("Taille clé invalide".into()))?)
+            .map_err(|_| VpnError::CryptoError("Clé Ed25519 invalide".into()))?;
+        
+        // Conversion Ed25519 -> X25519 pour la clé publique (Birational equivalence)
+        // Note: dalek-cryptography crates supportent cette conversion
+        use curve25519_dalek::edwards::CompressedEdwardsY;
+        let ed_point = CompressedEdwardsY::from_slice(ed_verifying_key.as_bytes())
+            .map_err(|_| VpnError::CryptoError("Échec point Edwards".into()))?
+            .decompress()
+            .ok_or_else(|| VpnError::CryptoError("Échec décompression point".into()))?;
+        
+        Ok(ed_point.to_montgomery().to_bytes())
+    }
+
+    /// Chiffre une chaîne (endpoint) pour une identité cible
+    pub fn encrypt_for_identity(text: &str, recipient_pubkey_hex: &str) -> Result<String> {
+        use x25519_dalek::{StaticSecret, PublicKey as XPublicKey};
+        use chacha20poly1305::{ChaCha20Poly1305, Key, Nonce, aead::{Aead, KeyInit}};
+
+        // 1. Générer une paire de clés éphémère X25519
+        let ephemeral_secret = StaticSecret::random_from_rng(OsRng);
+        let ephemeral_public = XPublicKey::from(&ephemeral_secret);
+
+        // 2. Préparer la clé publique du destinataire (conversion Ed -> X)
+        let recipient_x_bytes = Self::public_key_to_x25519(recipient_pubkey_hex)?;
+        let recipient_x_pub = XPublicKey::from(recipient_x_bytes);
+
+        // 3. Diffie-Hellman pour le secret partagé
+        let shared_secret = ephemeral_secret.diffie_hellman(&recipient_x_pub);
+        
+        // 4. Dériver une clé de chiffrement (HKDF simplifié ou utiliser les bytes directement si sur)
+        let cipher_key = Key::from_slice(shared_secret.as_bytes());
+        let cipher = ChaCha20Poly1305::new(cipher_key);
+        
+        // 5. Chiffrement
+        let nonce_bytes = CryptoRng::new().random_bytes::<12>()?;
+        let nonce = Nonce::from_slice(&nonce_bytes);
+        
+        let ciphertext = cipher.encrypt(nonce, text.as_bytes())
+            .map_err(|_| VpnError::CryptoError("Échec chiffrement AEAD".into()))?;
+
+        // 6. Format : b64(ephemeral_pub + nonce + ciphertext)
+        let mut combined = ephemeral_public.as_bytes().to_vec();
+        combined.extend_from_slice(&nonce_bytes);
+        combined.extend_from_slice(&ciphertext);
+        
+        Ok(B64.encode(combined))
+    }
+
+    /// Déchiffre une chaîne pour cette identité
+    pub fn decrypt_with_identity(&self, encrypted_b64: &str) -> Result<String> {
+        use x25519_dalek::{StaticSecret, PublicKey as XPublicKey};
+        use chacha20poly1305::{ChaCha20Poly1305, Key, Nonce, aead::{Aead, KeyInit}};
+
+        let combined = B64.decode(encrypted_b64)
+            .map_err(|_| VpnError::CryptoError("Base64 invalide".into()))?;
+        
+        if combined.len() < 32 + 12 {
+            return Err(VpnError::CryptoError("Payload trop court".into()));
+        }
+
+        let ephemeral_pub_bytes: [u8; 32] = combined[..32].try_into().unwrap();
+        let nonce_bytes: [u8; 12] = combined[32..44].try_into().unwrap();
+        let ciphertext = &combined[44..];
+
+        // 1. Convertir la clé privée Ed25519 en X25519
+        // Note: ed25519_dalek SigningKey -> X25519 StaticSecret
+        let mut secret_bytes = [0u8; 32];
+        secret_bytes.copy_from_slice(&self.signing_key.to_bytes()[..32]);
+        let my_x_secret = StaticSecret::from(secret_bytes);
+
+        // 2. Diffie-Hellman
+        let ephemeral_x_pub = XPublicKey::from(ephemeral_pub_bytes);
+        let shared_secret = my_x_secret.diffie_hellman(&ephemeral_x_pub);
+
+        // 3. Déchiffrement
+        let cipher_key = Key::from_slice(shared_secret.as_bytes());
+        let cipher = ChaCha20Poly1305::new(cipher_key);
+        let nonce = Nonce::from_slice(&nonce_bytes);
+
+        let plaintext = cipher.decrypt(nonce, ciphertext)
+            .map_err(|_| VpnError::CryptoError("Déchiffrement échoué (clé invalide?)".into()))?;
+
+        String::from_utf8(plaintext).map_err(|_| VpnError::CryptoError("UTF-8 invalide".into()))
+    }
 }
 
 #[cfg(test)]

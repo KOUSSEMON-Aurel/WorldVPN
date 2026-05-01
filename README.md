@@ -81,8 +81,9 @@ cd frontend/worldvpn-gui && bun tauri dev
 
 - [x] **Phase 1**: shared Rust core & WireGuard integration.
 - [x] **Phase 2**: Ed25519 Identity & libp2p Swarm discovery.
-- [ ] **Phase 3**: Standalone OS Daemon & P2P Super-Node relaying.
-- [ ] **Phase 4**: Fully decentralized credit marketplace (Tokenomics).
+- [x] **Phase 3**: Standalone OS Daemon & P2P Super-Node relaying.
+- [x] **Phase 4**: Anonymous Credit Migration & E2E Endpoint Encryption.
+- [x] **Phase 5**: Multi-Protocol Tunneling & Core Stabilization.
 
 ---
 

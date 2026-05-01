@@ -16,6 +16,7 @@ pub fn router(state: AppState) -> Router {
         // Authentication
         .route("/auth/login", post(auth::login))
         .route("/auth/identity", post(auth::identity_login))
+        .route("/auth/migrate", post(auth::migrate_credits))
         
         // VPN connection
         .route("/vpn/connect", post(vpn::connect))

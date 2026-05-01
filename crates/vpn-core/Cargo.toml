@@ -14,9 +14,11 @@ tokio.workspace = true
 quinn.workspace = true
 trust-dns-resolver.workspace = true
 ring.workspace = true
-x25519-dalek.workspace = true
+x25519-dalek = { workspace = true, features = ["static_secrets"] }
 chacha20poly1305.workspace = true
 ed25519-dalek = { workspace = true, features = ["pkcs8", "rand_core"] }
+curve25519-dalek = "4.1"
+libloading = "0.8"
 hkdf.workspace = true
 sha2.workspace = true
 zeroize.workspace = true

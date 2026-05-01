@@ -46,15 +46,32 @@ android-x86_64: tidy
 		-o $(OUT_DIR_X86)/libvpngo.so \
 		./cmd/libvpngo
 
-## Build both architectures
+## Build for Linux x86_64
+linux-amd64: tidy
+	mkdir -p ../crates/vpn-core/lib
+	CGO_ENABLED=1 \
+	GOOS=linux \
+	GOARCH=amd64 \
+	go build \
+		-buildmode=c-shared \
+		-trimpath \
+		-ldflags="-s -w" \
+		-o ../crates/vpn-core/lib/libvpngo.so \
+		./cmd/libvpngo
+
 android-all: android-arm64 android-x86_64
 
-## Verify the .so was produced
+## Build both architectures and Linux
+all: android-all linux-amd64
+
+## Verify produced binaries
 check:
-	@echo "=== ARM64 ==="
+	@echo "=== ARM64 Android ==="
 	@ls -lh $(OUT_DIR_ARM64)/libvpngo.so 2>/dev/null || echo "NOT FOUND"
-	@echo "=== x86_64 ==="
+	@echo "=== x86_64 Android ==="
 	@ls -lh $(OUT_DIR_X86)/libvpngo.so 2>/dev/null || echo "NOT FOUND"
+	@echo "=== x86_64 Linux ==="
+	@ls -lh ../crates/vpn-core/lib/libvpngo.so 2>/dev/null || echo "NOT FOUND"
 
 clean:
 	rm -f $(OUT_DIR_ARM64)/libvpngo.so $(OUT_DIR_X86)/libvpngo.so

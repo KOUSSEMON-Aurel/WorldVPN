@@ -21,6 +21,7 @@ repository = "https://github.com/worldvpn/worldvpn"
 tokio = { version = "1.35", features = ["full"] }
 quinn = "0.11"
 trust-dns-resolver = "0.23"
+boringtun = "0.6"
 
 # Cryptographie
 ring = "0.17"

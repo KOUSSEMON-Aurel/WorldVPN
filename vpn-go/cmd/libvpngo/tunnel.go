@@ -1,122 +1,183 @@
-// Package vpngo exposes VPN tunnel functions via CGO for Android.
-// Entry point: StartTunnel / StopTunnel called by WorldVpnService.kt via JNI.
 package main
 
 /*
 #include <stdlib.h>
 */
 import "C"
+
 import (
 	"encoding/json"
+	"fmt"
 	"log"
+	"net"
 	"sync"
-	"unsafe"
+
+	box "github.com/sagernet/sing-box"
+	_ "github.com/sagernet/sing-box/include"
+	"github.com/sagernet/sing-box/option"
 )
 
-// ConnectResponse mirrors the backend's response from POST /vpn/connect.
+// ConnectResponse mirrors the backend's response.
 type ConnectResponse struct {
 	SessionID      string `json:"session_id"`
-	Protocol       string `json:"protocol"`        // "WireGuard" | "Shadowsocks" | "Hysteria2" | "Trojan" | "VLESS"
-	VirtualIP      string `json:"assigned_ip"`     // "10.0.0.X"
-	PeerEndpoint   string `json:"peer_endpoint"`   // "1.2.3.4:51820"
-	PeerPublicKey  string `json:"peer_public_key"` // base64 X25519 (WireGuard)
-	ServerEndpoint string `json:"server_endpoint"` // fallback if peer_endpoint absent
-	PresharedKey   string `json:"preshared_key"`   // optional
-	Password       string `json:"password"`        // Shadowsocks / Hysteria2 / Trojan
-	UUID           string `json:"uuid"`            // VLESS user uuid
+	Protocol       string `json:"protocol"`
+	VirtualIP      string `json:"assigned_ip"`
+	PeerEndpoint   string `json:"peer_endpoint"`
+	PeerPublicKey  string `json:"peer_public_key"`
+	ServerEndpoint string `json:"server_endpoint"`
+	Password       string `json:"password"`
+	UUID           string `json:"uuid"`
 	DNS            string `json:"dns"`
 	MTU            int    `json:"mtu"`
 }
 
 var (
-	mu      sync.Mutex
-	running tunnel
+	mu       sync.Mutex
+	instance *box.Box
 )
 
-type tunnel interface {
-	Stop()
-}
-
-// StartTunnel is exported via CGO. tunFd is the Android TUN file descriptor.
-// configJSON is the JSON-encoded ConnectResponse from the backend.
-//
 //export StartTunnel
 func StartTunnel(tunFd C.int, configJSON *C.char) C.int {
 	mu.Lock()
 	defer mu.Unlock()
 
-	if running != nil {
-		running.Stop()
-		running = nil
+	if instance != nil {
+		instance.Close()
+		instance = nil
 	}
 
-	jsonStr := C.GoString(configJSON)
+	cfgStr := C.GoString(configJSON)
 	var cfg ConnectResponse
-	if err := json.Unmarshal([]byte(jsonStr), &cfg); err != nil {
-		log.Printf("[vpn-go] JSON parse error: %v", err)
+	if err := json.Unmarshal([]byte(cfgStr), &cfg); err != nil {
+		log.Printf("[vpn-go] JSON error: %v", err)
 		return -1
 	}
 
-	fd := int(tunFd)
-	if cfg.MTU == 0 {
-		cfg.MTU = 1420
-	}
-	if cfg.DNS == "" {
-		cfg.DNS = "1.1.1.1"
-	}
+	// Build JSON config
+	configMap := buildConfigMap(int(tunFd), cfg)
+	jsonBytes, _ := json.Marshal(configMap)
 
-	// Resolve server address: prefer peer_endpoint, fallback to server_endpoint
-	endpoint := cfg.PeerEndpoint
-	if endpoint == "" {
-		endpoint = cfg.ServerEndpoint
-	}
-
-	var t tunnel
-	var err error
-
-	switch cfg.Protocol {
-	case "WireGuard":
-		t, err = startWireGuard(fd, cfg, endpoint)
-	case "WireGuardObfuscated":
-		t, err = startWireGuardObfuscated(fd, cfg, endpoint)
-	case "Shadowsocks":
-		t, err = startShadowsocks(fd, cfg, endpoint)
-	case "Hysteria2":
-		t, err = startHysteria2(fd, cfg, endpoint)
-	case "Trojan":
-		t, err = startXray(fd, cfg, endpoint, "trojan")
-	case "VLESS":
-		t, err = startXray(fd, cfg, endpoint, "vless")
-	default:
-		log.Printf("[vpn-go] Unknown protocol: %s", cfg.Protocol)
+	var opts option.Options
+	if err := json.Unmarshal(jsonBytes, &opts); err != nil {
+		log.Printf("[vpn-go] Config unmarshal error: %v", err)
 		return -1
 	}
 
+	b, err := box.New(box.Options{
+		Options: opts,
+	})
 	if err != nil {
-		log.Printf("[vpn-go] Tunnel start error (%s): %v", cfg.Protocol, err)
+		log.Printf("[vpn-go] sing-box create error: %v", err)
 		return -1
 	}
 
-	running = t
-	log.Printf("[vpn-go] Tunnel started: protocol=%s endpoint=%s", cfg.Protocol, endpoint)
+	if err := b.Start(); err != nil {
+		log.Printf("[vpn-go] sing-box start error: %v", err)
+		b.Close()
+		return -1
+	}
+
+	instance = b
+	log.Printf("[vpn-go] Tunnel started: protocol=%s", cfg.Protocol)
 	return 0
 }
 
-// StopTunnel stops the currently running tunnel.
-//
 //export StopTunnel
 func StopTunnel() {
 	mu.Lock()
 	defer mu.Unlock()
-	if running != nil {
-		running.Stop()
-		running = nil
+	if instance != nil {
+		instance.Close()
+		instance = nil
 		log.Println("[vpn-go] Tunnel stopped")
 	}
 }
 
-// Required for CGO c-shared build — must be present but empty.
-func main() {}
+func buildConfigMap(tunFd int, cfg ConnectResponse) map[string]interface{} {
+	endpoint := cfg.PeerEndpoint
+	if endpoint == "" {
+		endpoint = cfg.ServerEndpoint
+	}
+	host, port, _ := splitAddr(endpoint)
 
-// Suppress unused import warning for unsafe (needed for CGO types)
-var _ = unsafe.Pointer(nil)
+	// Build Inbound
+	tunInbound := map[string]interface{}{
+		"type":          "tun",
+		"tag":           "tun-in",
+		"mtu":           cfg.MTU,
+		"inet4_address": []string{cfg.VirtualIP + "/32"},
+		"stack":         "gvisor",
+		"auto_route":    true,
+		"strict_route":  true,
+	}
+
+	// On Android, use the provided File Descriptor
+	if tunFd > 0 {
+		tunInbound["fd"] = tunFd
+	}
+
+	// Build Outbound
+	var outbound map[string]interface{}
+	switch cfg.Protocol {
+	case "WireGuard":
+		outbound = map[string]interface{}{
+			"type":          "wireguard",
+			"tag":           "proxy",
+			"server":        host,
+			"server_port":   port,
+			"local_address": []string{cfg.VirtualIP + "/32"},
+			"public_key":    cfg.PeerPublicKey,
+			"mtu":           cfg.MTU,
+		}
+	case "Shadowsocks":
+		outbound = map[string]interface{}{
+			"type":        "shadowsocks",
+			"tag":         "proxy",
+			"server":      host,
+			"server_port": port,
+			"method":      "aes-256-gcm",
+			"password":    cfg.Password,
+		}
+	case "Hysteria2":
+		outbound = map[string]interface{}{
+			"type":        "hysteria2",
+			"tag":         "proxy",
+			"server":      host,
+			"server_port": port,
+			"password":    cfg.Password,
+		}
+	case "VLESS":
+		outbound = map[string]interface{}{
+			"type":        "vless",
+			"tag":         "proxy",
+			"server":      host,
+			"server_port": port,
+			"uuid":        cfg.UUID,
+		}
+	case "Trojan":
+		outbound = map[string]interface{}{
+			"type":        "trojan",
+			"tag":         "proxy",
+			"server":      host,
+			"server_port": port,
+			"password":    cfg.Password,
+		}
+	}
+
+	return map[string]interface{}{
+		"inbounds":  []interface{}{tunInbound},
+		"outbounds": []interface{}{outbound},
+	}
+}
+
+func splitAddr(addr string) (string, uint16, error) {
+	h, p, err := net.SplitHostPort(addr)
+	if err != nil {
+		return addr, 443, nil
+	}
+	var port uint16
+	fmt.Sscanf(p, "%d", &port)
+	return h, port, nil
+}
+
+func main() {}

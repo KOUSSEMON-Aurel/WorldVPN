@@ -7,7 +7,12 @@ use crate::error::Result;
 use crate::protocol::VpnProtocol;
 
 pub mod windows;
+pub mod external;
+pub mod go_bridge;
+pub mod go_tunnel;
 pub use windows::WindowsTunnel;
+pub use external::ExternalTunnel;
+pub use go_tunnel::GoTunnel;
 
 /// Provides a handle to an active VPN tunnel connection
 #[derive(Debug, Clone)]

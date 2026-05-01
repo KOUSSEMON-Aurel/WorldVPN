@@ -7,6 +7,8 @@ use vpn_core::{
     p2p::{PeerDiscovery, PeerInfo},
 };
 use tokio::sync::OnceCell;
+use vpn_core::tunnel::{VpnTunnel, WireGuardTunnel, ExternalTunnel, ConnectionConfig, Credentials};
+use std::net::SocketAddr;
 
 // Shared state to track VPN status across the app
 struct AppState {
@@ -14,6 +16,7 @@ struct AppState {
     is_sharing: Mutex<bool>,
     p2p: OnceCell<Arc<PeerDiscovery>>,
     api_client: VpnApiClient,
+    active_tunnel: Mutex<Option<Box<dyn VpnTunnel + Send>>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -93,13 +96,35 @@ async fn login_anonymously_desktop(
     }))
 }
 #[tauri::command]
+async fn migrate_credits_desktop(
+    old_private_key: Vec<u8>,
+    new_public_key: String,
+    state: State<'_, AppState>
+) -> Result<serde_json::Value, String> {
+    let old_identity = IdentityKey::from_bytes(&old_private_key).map_err(|e| e.to_string())?;
+    
+    // Sign the new public key using the old identity
+    let signature = old_identity.sign_challenge(&new_public_key);
+    
+    state.api_client.migrate_credits(
+        old_identity.public_key_hex(),
+        new_public_key,
+        signature
+    ).await.map_err(|e| e.to_string())
+}
+
+#[tauri::command]
 async fn connect_vpn(
     protocol: String,
-    _country: String,
+    country: String,
+    token: String,
+    private_key: Vec<u8>,
     state: State<'_, AppState>,
     #[allow(unused_variables)]
     app_handle: tauri::AppHandle,
 ) -> Result<VpnStatus, String> {
+    let identity = IdentityKey::from_bytes(&private_key).map_err(|e| e.to_string())?;
+    
     // 1. Update state to Connecting
     {
         let mut status = state.vpn_status.lock().map_err(|_| "Failed to lock state")?;
@@ -107,22 +132,86 @@ async fn connect_vpn(
     }
 
     // 2. Perform matchmaking and connect
-    // In a real implementation, we would call state.api_client.connect(...)
-    
-    // 3. Update state to Connected
-    let mut status = state.vpn_status.lock().map_err(|_| "Failed to lock state")?;
-    status.state = ConnectionState::Connected;
-    status.current_ip = Some(format!("10.8.0.{}", rand::random::<u8>()));
-    status.protocol = Some(protocol);
-    status.connected_since = Some(chrono::Utc::now().timestamp());
+    let proto = match protocol.as_str() {
+        "WireGuard" => vpn_core::protocol::VpnProtocol::WireGuard,
+        "Hysteria 2" => vpn_core::protocol::VpnProtocol::Hysteria2,
+        "Shadowsocks" => vpn_core::protocol::VpnProtocol::Shadowsocks,
+        "Trojan" => vpn_core::protocol::VpnProtocol::Trojan,
+        "VLESS" => vpn_core::protocol::VpnProtocol::VLESS,
+        _ => vpn_core::protocol::VpnProtocol::WireGuard,
+    };
 
-    Ok(status.clone())
+    let mut info = state.api_client.connect(
+        proto,
+        Some(identity.public_key_hex()),
+        Some(country),
+        &token
+    ).await.map_err(|e| e.to_string())?;
+    
+    // Phase 4 : Déchiffrement E2E automatique si nécessaire
+    if info.server_endpoint.starts_with("e2e:") {
+        let encrypted = &info.server_endpoint[4..];
+        match identity.decrypt_with_identity(encrypted) {
+            Ok(decrypted) => info.server_endpoint = decrypted,
+            Err(e) => return Err(format!("Échec déchiffrement endpoint: {}", e)),
+        }
+    }
+
+    // 3. Establish Tunnel
+    let server_addr: SocketAddr = info.server_endpoint.parse().map_err(|e| format!("Invalid endpoint: {}", e))?;
+    let credentials = Credentials::Password { 
+        username: identity.public_key_hex(), 
+        password: "p2p-session-key".to_string() 
+    };
+
+    let config = ConnectionConfig {
+        protocol: proto,
+        server_addr,
+        credentials,
+        timeout: std::time::Duration::from_secs(10),
+    };
+
+    let mut tunnel: Box<dyn VpnTunnel + Send> = match proto {
+        vpn_core::protocol::VpnProtocol::WireGuard | vpn_core::protocol::VpnProtocol::WireGuardObfuscated => Box::new(WireGuardTunnel::new()),
+        _ => Box::new(ExternalTunnel::new(proto)),
+    };
+
+    match tunnel.connect(&config).await {
+        Ok(handle) => {
+            // Save active tunnel
+            {
+                let mut active = state.active_tunnel.lock().unwrap();
+                *active = Some(tunnel);
+            }
+
+            // Update status
+            let mut status = state.vpn_status.lock().unwrap();
+            status.state = ConnectionState::Connected;
+            status.current_ip = Some(handle.assigned_ip.to_string());
+            status.protocol = Some(protocol);
+            status.connected_since = Some(chrono::Utc::now().timestamp());
+            Ok(status.clone())
+        },
+        Err(e) => {
+            let mut status = state.vpn_status.lock().unwrap();
+            status.state = ConnectionState::Error(e.to_string());
+            Err(e.to_string())
+        }
+    }
 }
 
 #[tauri::command]
 async fn disconnect_vpn(state: State<'_, AppState>) -> Result<VpnStatus, String> {
-    let mut status = state.vpn_status.lock().map_err(|_| "Failed to lock state")?;
-    
+    // 1. Stop active tunnel
+    {
+        let mut active = state.active_tunnel.lock().unwrap();
+        if let Some(mut tunnel) = active.take() {
+            let _ = tunnel.disconnect().await;
+        }
+    }
+
+    // 2. Update status
+    let mut status = state.vpn_status.lock().unwrap();
     status.state = ConnectionState::Disconnected;
     status.current_ip = None;
     status.protocol = None;
@@ -182,10 +271,12 @@ pub fn run() {
             is_sharing: Mutex::new(false),
             p2p: OnceCell::new(),
             api_client,
+            active_tunnel: Mutex::new(None),
         })
         .invoke_handler(tauri::generate_handler![
             generate_identity,
             login_anonymously_desktop,
+            migrate_credits_desktop,
             connect_vpn, 
             disconnect_vpn, 
             get_vpn_status,

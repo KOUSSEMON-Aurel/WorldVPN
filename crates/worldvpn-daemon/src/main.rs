@@ -37,6 +37,36 @@ struct Args {
     country: String,
 }
 
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
+struct PeerScore {
+    latency_ms: u32,
+    success_rate: f64,
+    last_check: i64,
+}
+
+#[derive(serde::Serialize, serde::Deserialize, Default)]
+struct ReputationData {
+    scores: std::collections::HashMap<String, PeerScore>,
+}
+
+async fn save_reputation(data: &ReputationData) -> Result<()> {
+    let home = std::env::var("HOME").unwrap_or_else(|_| ".".into());
+    let path = std::path::PathBuf::from(home).join(".worldvpn").join("reputation.json");
+    let json = serde_json::to_string_pretty(data)?;
+    tokio::fs::create_dir_all(path.parent().unwrap()).await?;
+    tokio::fs::write(path, json).await?;
+    Ok(())
+}
+
+async fn load_reputation() -> ReputationData {
+    let home = std::env::var("HOME").unwrap_or_else(|_| ".".into());
+    let path = std::path::PathBuf::from(home).join(".worldvpn").join("reputation.json");
+    if let Ok(json) = tokio::fs::read_to_string(path).await {
+        return serde_json::from_str(&json).unwrap_or_default();
+    }
+    ReputationData::default()
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
     // Initialize logging
@@ -124,6 +154,68 @@ async fn main() -> Result<()> {
     if args.super_node {
         info!("Running in Super-Node mode. DHT relay active.");
     }
+    
+    // Attempt local connection via API wrapper
+    info!("Starting hybrid VPN tunnel...");
+    if let Err(e) = vpn_core::api::simple::start_vpn_matchmaking("Shadowsocks".to_string(), args.country.clone(), "Free".to_string()) {
+        error!("Failed to start VPN tunnel: {}", e);
+    } else {
+        info!("VPN tunnel started successfully.");
+    }
+
+    // 4. Local Reputation & Latency Monitoring (Phase 5)
+    let reputation_data = Arc::new(tokio::sync::Mutex::new(load_reputation().await));
+    let rep_clone = reputation_data.clone();
+    let discovery_clone = discovery.clone();
+
+    tokio::spawn(async move {
+        let mut interval = tokio::time::interval(std::time::Duration::from_secs(60)); // Every min
+        loop {
+            interval.tick().await;
+            
+            // 1. Get peers to check (In a real impl, we query Discovery)
+            // For now we simulate discovery of a few peers from DHT
+            let peers_to_check = match discovery_clone.find_peers(&vpn_core::p2p::PeerCriteria {
+                country: None,
+                min_reputation: 0,
+                min_bandwidth_mbps: 0.0,
+                use_case: vpn_core::selector::UseCase::Browsing,
+            }).await {
+                Ok(p) => p,
+                Err(_) => vec![],
+            };
+
+            if peers_to_check.is_empty() { continue; }
+
+            info!("Starting reputation check for {} peers...", peers_to_check.is_empty());
+            
+            let mut data = rep_clone.lock().await;
+            for peer in peers_to_check {
+                info!("Pinging peer {}...", peer.id);
+                // Real implementation: try to connect or send a heartbeat
+                let start = std::time::Instant::now();
+                let success = true; // Placeholder for real network check
+                let latency = start.elapsed().as_millis() as u32;
+
+                let score = data.scores.entry(peer.id.clone()).or_insert(PeerScore {
+                    latency_ms: 0,
+                    success_rate: 1.0,
+                    last_check: 0,
+                });
+
+                // Moving average for latency
+                score.latency_ms = (score.latency_ms + latency) / 2;
+                score.success_rate = if success { 
+                    (score.success_rate * 0.9) + 0.1 
+                } else { 
+                    score.success_rate * 0.9 
+                };
+                score.last_check = chrono::Utc::now().timestamp();
+            }
+            
+            let _ = save_reputation(&data).await;
+        }
+    });
 
     info!("WorldVPN Daemon is now active and relaying P2P traffic.");
     

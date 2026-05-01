@@ -157,11 +157,23 @@ pub async fn submit_receipt(
     let pool = state.db.as_ref().expect("DB not initialized");
     
     // 1. Verify Signature (Cryptographic Proof of Bandwidth)
-    // In a real implementation, we would use ed25519-dalek to verify
-    // that 'signature' matches the payload signed by 'consumer_pubkey'.
-    // For this migration, we'll implement the logic and assumed verification passes for now.
+    let identity = match crate::auth::get_identity_from_pubkey(&payload.consumer_pubkey) {
+        Ok(id) => id,
+        Err(_) => {
+            // If user not in cache/db, we still verify the signature manually
+             match vpn_core::crypto::IdentityKey::from_pubkey_hex(&payload.consumer_pubkey) {
+                 Ok(id) => id,
+                 Err(_) => return (StatusCode::BAD_REQUEST, Json(json!({"error": "Invalid consumer public key"}))).into_response(),
+             }
+        }
+    };
+
+    let message = format!("{}:{}:{}:{}", payload.session_id, payload.provider_pubkey, payload.bytes_total, payload.timestamp);
+    if !identity.verify_signature(&message, &payload.signature) {
+        return (StatusCode::UNAUTHORIZED, Json(json!({"error": "Invalid receipt signature"}))).into_response();
+    }
     
-    let consumer_id = payload.consumer_pubkey.clone(); // In V2, we use pubkey as ID base
+    let consumer_id = payload.consumer_pubkey.clone();
     let provider_id = payload.provider_pubkey.clone();
     
     // Standard conversion: 1MB = 1 Credit

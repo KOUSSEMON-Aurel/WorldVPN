@@ -36,9 +36,11 @@ lazy_static! {
     static ref STATUS_STREAM: Mutex<Option<StreamSink<VpnStatusEvent>>> = Mutex::new(None);
     static ref AUTH_TOKEN: Mutex<Option<String>> = Mutex::new(None);
     static ref LOGGED_USER: Mutex<Option<String>> = Mutex::new(None);
+    static ref PRIVATE_KEY: Mutex<Option<Vec<u8>>> = Mutex::new(None);
     static ref IS_SHARING: Mutex<bool> = Mutex::new(false);
     static ref SHARING_TASK: Mutex<Option<tokio::task::JoinHandle<()>>> = Mutex::new(None);
     static ref BACKEND_URL: Mutex<String> = Mutex::new("http://localhost:3000".to_string());
+    static ref ACTIVE_TUNNEL: Mutex<Option<Box<dyn crate::tunnel::VpnTunnel>>> = Mutex::new(None);
 }
 
 pub fn set_backend_url(url: String) {
@@ -67,6 +69,11 @@ pub fn login_anonymously(private_key_bytes: Vec<u8>) -> anyhow::Result<String> {
     let identity = crate::crypto::IdentityKey::from_bytes(&private_key_bytes)?;
     let public_key = identity.public_key_hex();
     
+    // Save private key for E2EE decryption in future matchmaking calls
+    if let Ok(mut key_guard) = PRIVATE_KEY.lock() {
+        *key_guard = Some(private_key_bytes.clone());
+    }
+
     // Create challenge payload
     let timestamp = chrono::Utc::now().timestamp().to_string();
     let signature = identity.sign_challenge(&timestamp);
@@ -94,10 +101,14 @@ pub fn start_vpn_matchmaking(protocol_str: String, country_code: String, node_gr
         
         let token_opt = AUTH_TOKEN.lock().unwrap().clone();
         let user_opt = LOGGED_USER.lock().unwrap().clone();
+        let key_opt = PRIVATE_KEY.lock().unwrap().clone();
         
         let token = token_opt.ok_or_else(|| anyhow::anyhow!("Not authenticated"))?;
         let username = user_opt.ok_or_else(|| anyhow::anyhow!("No user session"))?;
+        let private_key_bytes = key_opt.ok_or_else(|| anyhow::anyhow!("Missing identity key"))?;
         
+        let identity = crate::crypto::IdentityKey::from_bytes(&private_key_bytes)?;
+
         // 1. Notify UI
         send_status("Connecting", &protocol_str, 0.0, 0.0);
 
@@ -136,22 +147,32 @@ pub fn start_vpn_matchmaking(protocol_str: String, country_code: String, node_gr
             }
         };
 
-        // 3. Backend Matchmaking (TODO: handle node_group logic to switch to /nodes/public if "PUBLIC")
+        // 3. Backend Matchmaking
         let client = VpnApiClient::new(get_backend_url());
-        let conn_info = client.connect(
+        let mut conn_info = client.connect(
             chosen_protocol, 
-            Some(username.clone()), // Use public_key_hex as connection identifier if needed
+            Some(username.clone()), 
             Some(country_code), 
             &token
         ).await?;
+
+        // 4. E2EE Decryption
+        if conn_info.server_endpoint.starts_with("e2e:") {
+            tracing::info!("Decrypting E2E endpoint...");
+            let encrypted_b64 = &conn_info.server_endpoint[4..];
+            let decrypted = identity.decrypt_with_identity(encrypted_b64)?;
+            tracing::info!("Decryption OK: {}", decrypted);
+            conn_info.server_endpoint = decrypted;
+        }
+
         tracing::info!("Matchmaking OK: endpoint={}", conn_info.server_endpoint);
         
         // Build JSON for Go's WorldVpnService
         let mut map = serde_json::Map::new();
-        map.insert("session_id".into(),      serde_json::Value::String(conn_info.session_id));
+        map.insert("session_id".into(),      serde_json::Value::String(conn_info.session_id.clone()));
         map.insert("server_endpoint".into(), serde_json::Value::String(conn_info.server_endpoint.clone()));
-        map.insert("peer_endpoint".into(),   serde_json::Value::String(conn_info.server_endpoint));
-        map.insert("assigned_ip".into(),     serde_json::Value::String(conn_info.assigned_ip));
+        map.insert("peer_endpoint".into(),   serde_json::Value::String(conn_info.server_endpoint.clone()));
+        map.insert("assigned_ip".into(),     serde_json::Value::String(conn_info.assigned_ip.clone()));
         map.insert("protocol".into(),        serde_json::Value::String(format!("{:?}", chosen_protocol)));
         if let Some(key) = conn_info.server_public_key {
             map.insert("peer_public_key".into(), serde_json::Value::String(key));
@@ -159,8 +180,31 @@ pub fn start_vpn_matchmaking(protocol_str: String, country_code: String, node_gr
         map.insert("dns".into(), serde_json::Value::String("1.1.1.1".into()));
         map.insert("mtu".into(), serde_json::Value::Number(1420.into()));
         
-        send_status("Connecting", &format!("{:?}", chosen_protocol), 0.0, 0.0);
-        Ok(serde_json::to_string(&serde_json::Value::Object(map))?)
+        let config_json = serde_json::to_string(&serde_json::Value::Object(map))?;
+        
+        #[cfg(target_os = "linux")]
+        {
+            let tunnel = crate::tunnel::go_tunnel::GoTunnel::new(conn_info.session_id.clone(), chosen_protocol);
+            let _config = crate::tunnel::ConnectionConfig {
+                protocol: chosen_protocol,
+                server_addr: conn_info.server_endpoint.parse()?,
+                credentials: crate::tunnel::Credentials::Password { 
+                    username: Some(username), 
+                    password: "".to_string() // Password mapping depends on protocol
+                },
+                timeout: std::time::Duration::from_secs(10),
+            };
+            
+            // Note: assigned_ip and other details are already in map/config_json
+            crate::tunnel::go_bridge::GoBridge::start_tunnel(0, &config_json)?;
+            
+            if let Ok(mut guard) = ACTIVE_TUNNEL.lock() {
+                *guard = Some(Box::new(tunnel));
+            }
+        }
+
+        send_status("Connected", &format!("{:?}", chosen_protocol), 0.0, 0.0);
+        Ok(config_json)
     })
 }
 
@@ -262,6 +306,15 @@ fn send_status(status: &str, protocol: &str, dl: f64, ul: f64) {
 
 pub fn stop_vpn_connection() -> anyhow::Result<()> {
     tracing::info!("Mobile request: Disconnect");
+    
+    // Stop Go tunnel via bridge
+    crate::tunnel::go_bridge::GoBridge::stop_tunnel()?;
+    
+    if let Ok(mut guard) = ACTIVE_TUNNEL.lock() {
+        *guard = None;
+    }
+    
+    send_status("Disconnected", "", 0.0, 0.0);
     Ok(())
 }
 

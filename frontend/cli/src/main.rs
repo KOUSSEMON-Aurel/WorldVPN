@@ -10,10 +10,8 @@ use tracing_subscriber::EnvFilter;
 use vpn_core::{
     crypto::SecretKey,
     selector::{ProtocolSelector, SelectionContext, NetworkQuality, FirewallProfile, DeviceType, UseCase},
-    tunnel::{ConnectionConfig, Credentials, VpnTunnel},
+    tunnel::{ConnectionConfig, Credentials, VpnTunnel, ExternalTunnel, WireGuardTunnel},
     protocol::VpnProtocol,
-    wireguard::WireGuardTunnel,
-    openvpn::OpenVpnTunnel,
     mock::MockTunnel,
 };
 
@@ -96,16 +94,11 @@ async fn main() -> anyhow::Result<()> {
         Commands::Connect { proto, server } => {
             println!("⚠️ Mode simulation locale uniquement.");
         }
-        Commands::RemoteConnect { api, user, proto } => {
+        Commands::RemoteConnect { api, user: _, proto } => {
             let protocol = match proto.to_lowercase().as_str() {
                 "wg" | "wireguard" => VpnProtocol::WireGuard,
                 "ss" | "shadowsocks" => VpnProtocol::Shadowsocks,
-                "ovpn" | "openvpn" => VpnProtocol::OpenVpnTcp,
-                "ovpn-udp" => VpnProtocol::OpenVpnUdp,
-                "ikev2" | "ipsec" => VpnProtocol::IKEv2,
                 "hy2" | "hysteria" => VpnProtocol::Hysteria2,
-                "trojan" => VpnProtocol::Trojan,
-                "vless" | "v2ray" => VpnProtocol::VLESS,
                 _ => {
                     error!("Protocole inconnu '{}', utilisation WireGuard défaut", proto);
                     VpnProtocol::WireGuard
@@ -114,35 +107,70 @@ async fn main() -> anyhow::Result<()> {
 
             println!("🌍 Connexion au serveur WorldVPN ({}) via {}", api, protocol.name());
             
-            // 1. Login pour obtenir le JWT
-            println!("🔐 Authentification...");
+            // 1. Identité Anonyme (V2) - Persistance locale
+            let home = std::env::var("HOME").unwrap_or_else(|_| ".".into());
+            let id_path = std::path::PathBuf::from(home).join(".worldvpn").join("cli_id.der");
+            
+            let identity = if id_path.exists() {
+                println!("🔐 Chargement de l'identité existante...");
+                let bytes = std::fs::read(&id_path)?;
+                vpn_core::crypto::IdentityKey::from_bytes(&bytes)?
+            } else {
+                println!("🔐 Génération d'une nouvelle identité anonyme...");
+                let id = vpn_core::crypto::IdentityKey::generate();
+                let bytes = id.to_bytes()?;
+                std::fs::create_dir_all(id_path.parent().unwrap())?;
+                std::fs::write(&id_path, &*bytes)?;
+                id
+            };
+
+            let pubkey = identity.public_key_hex();
+            let timestamp = chrono::Utc::now().timestamp().to_string();
+            let signature = identity.sign_challenge(&timestamp);
+
+            // 2. Login pour obtenir le JWT
+            println!("🔐 Authentification via Ed25519...");
             let client = vpn_core::client::VpnApiClient::new(api.clone());
             
-            let login_response = match client.login(user.clone(), user.clone()).await {
+            let login_response = match client.login_with_identity(pubkey.clone(), signature, timestamp).await {
                 Ok(r) => r,
                 Err(e) => {
-                    println!("❌ Erreur Login: {}", e);
-                    println!("💡 L'utilisateur n'existe peut-être pas. Utilisez /auth/register d'abord.");
+                    println!("❌ Erreur Authentification: {}", e);
                     return Ok(());
                 }
             };
-            println!("✅ Authentification réussie !");
+            println!("✅ Connecté avec succès ! (Anonyme)");
 
-            // 2. Connexion VPN avec le token
-            println!("\n🔌 Demande de connexion VPN...");
-            // Initialisation de la session
-            let session = match client.connect(
+            // 3. Connexion VPN avec le token et PubKey pour E2EE
+            println!("\n🔌 Demande de connexion VPN (Failover/P2P)...");
+            let mut session = match client.connect(
                 protocol,
-                user, 
-                Some("pubkey_placeholder".into()),
+                Some(pubkey), 
+                Some("FR".into()),
                 &login_response.token
             ).await {
                 Ok(s) => s,
                 Err(e) => {
-                    println!("❌ Erreur API: {}", e);
+                    println!("❌ Erreur API Connexion: {}", e);
                     return Ok(());
                 }
             };
+
+            // Phase 4 : Déchiffrement E2E automatique si nécessaire
+            if session.server_endpoint.starts_with("e2e:") {
+                print!("🛡️  Endpoint chiffré reçu. Déchiffrement... ");
+                let encrypted = &session.server_endpoint[4..];
+                match identity.decrypt_with_identity(encrypted) {
+                    Ok(dec) => {
+                        session.server_endpoint = dec;
+                        println!("✅");
+                    },
+                    Err(e) => {
+                        println!("❌ Erreur: {}", e);
+                        return Ok(());
+                    }
+                }
+            }
 
             println!("🔑 Session obtenue ! ID: {}", session.session_id);
             println!("   🎯 Endpoint: {}", session.server_endpoint);
@@ -151,22 +179,15 @@ async fn main() -> anyhow::Result<()> {
             }
 
             // 3. Initialisation du Tunnel
+            // Initialisation du Tunnel
             let server_addr: SocketAddr = session.server_endpoint.parse().expect("Adresse invalide");
 
-            // Configuration Credentials selon protocole
-            let credentials = match protocol {
-                VpnProtocol::Shadowsocks => {
-                    let pwd = session.server_public_key.unwrap_or("chacha20-ietf-poly1305:secret".into());
-                    Credentials::Password { username: None, password: pwd }
-                },
-                _ => {
-                    let key = SecretKey::generate(32).unwrap();
-                    let peer_key = SecretKey::generate(32).unwrap();
-                    Credentials::KeyPair {
-                        private_key: key.as_bytes().to_vec(),
-                        peer_public_key: peer_key.as_bytes().to_vec(),
-                    }
-                }
+            // Configuration Credentials (KeyPair for WireGuard)
+            let key = SecretKey::generate(32).unwrap();
+            let peer_key = SecretKey::generate(32).unwrap();
+            let credentials = Credentials::KeyPair {
+                private_key: key.as_bytes().to_vec(),
+                peer_public_key: peer_key.as_bytes().to_vec(),
             };
 
             let config = ConnectionConfig {
@@ -176,19 +197,12 @@ async fn main() -> anyhow::Result<()> {
                 timeout: Duration::from_secs(10),
             };
 
-            // Création du tunnel abstrait
-            // Instanciation tunnel
+            // Création du tunnel réel (CLI rust)
             let mut tunnel: Box<dyn VpnTunnel> = match protocol {
-                VpnProtocol::Shadowsocks => Box::new(vpn_core::shadowsocks::ShadowsocksTunnel::new()),
                 VpnProtocol::WireGuard | VpnProtocol::WireGuardObfuscated => Box::new(WireGuardTunnel::new()),
-                VpnProtocol::OpenVpnTcp | VpnProtocol::OpenVpnUdp => Box::new(OpenVpnTunnel::new()),
-                VpnProtocol::IKEv2 => Box::new(vpn_core::ikev2::IKEv2Tunnel::new()),
-                VpnProtocol::Hysteria2 => Box::new(vpn_core::hysteria::HysteriaTunnel::new()),
-                VpnProtocol::Trojan => Box::new(vpn_core::v2ray::V2RayTunnel::new(VpnProtocol::Trojan)),
-                VpnProtocol::VLESS => Box::new(vpn_core::v2ray::V2RayTunnel::new(VpnProtocol::VLESS)),
-                _ => Box::new(WireGuardTunnel::new()),
+                VpnProtocol::Shadowsocks | VpnProtocol::Hysteria2 | VpnProtocol::Trojan | VpnProtocol::VLESS => Box::new(ExternalTunnel::new(protocol)),
             };
-            println!("\n🔌 Initialisation du tunnel {}...", protocol.name());
+            println!("\n🔌 Initialisation du tunnel {} (Réel)...", protocol.name());
             
             match tunnel.connect(&config).await {
                 Ok(handle) => {

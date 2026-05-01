@@ -95,7 +95,7 @@ impl VpnApiClient {
         
         let payload = ConnectRequest {
             protocol,
-            public_key,
+            public_key: public_key.clone(),
             preferred_country,
         };
 
@@ -112,10 +112,13 @@ impl VpnApiClient {
             return Err(VpnError::ConnectionFailed(format!("API Error: {}", response.status())));
         }
 
-        let info = response
+        let mut info = response
             .json::<ConnectionInfo>()
             .await
             .map_err(|e| VpnError::Internal(format!("Invalid response: {}", e)))?;
+
+        // Note: Le déchiffrement E2E s'effectue au niveau de l'appelant (app_handle ou cli)
+        // car il possède l'IdentityKey privée.
 
         Ok(info)
     }
@@ -234,6 +237,40 @@ impl VpnApiClient {
             .await
             .map_err(|e| VpnError::Internal(format!("Invalid balance response: {}", e)))?;
         Ok(bal.credits)
+    }
+
+    /// Migre les crédits d'une ancienne identité vers une nouvelle
+    pub async fn migrate_credits(
+        &self,
+        old_public_key: String,
+        new_public_key: String,
+        signature_old: String,
+    ) -> Result<serde_json::Value> {
+        let url = format!("{}/auth/migrate", self.base_url);
+        
+        let payload = serde_json::json!({
+            "old_public_key": old_public_key,
+            "new_public_key": new_public_key,
+            "signature_old": signature_old,
+        });
+
+        let response = self.client
+            .post(&url)
+            .json(&payload)
+            .send()
+            .await
+            .map_err(|e| VpnError::ConnectionFailed(format!("Migration API failed: {}", e)))?;
+
+        if !response.status().is_success() {
+            let status = response.status();
+            let err = response.text().await.unwrap_or_default();
+            return Err(VpnError::ConnectionFailed(format!("Migration error ({}): {}", status, err)));
+        }
+
+        let data = response.json().await
+            .map_err(|e| VpnError::Internal(format!("Invalid migration response: {}", e)))?;
+        
+        Ok(data)
     }
 }
 

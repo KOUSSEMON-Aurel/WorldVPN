@@ -190,9 +190,25 @@ pub async fn connect(
 
     tracing::info!("Session created: {} -> {} via {:?}", session_id, endpoint, payload.protocol);
 
+    // Chiffrement E2E de l'endpoint si une clé publique est fournie (Phase 4)
+    let final_endpoint = if let Some(ref pubkey) = payload.public_key {
+        match vpn_core::crypto::IdentityKey::encrypt_for_identity(&endpoint, pubkey) {
+            Ok(enc) => {
+                tracing::info!("Endpoint chiffré pour le client {}", pubkey);
+                format!("e2e:{}", enc)
+            },
+            Err(e) => {
+                tracing::error!("Erreur chiffrement endpoint: {}", e);
+                endpoint
+            }
+        }
+    } else {
+        endpoint
+    };
+
     let response = ConnectResponse {
         session_id,
-        server_endpoint: endpoint,
+        server_endpoint: final_endpoint,
         assigned_ip: virtual_ip,
         server_public_key: credentials,
         node_country,

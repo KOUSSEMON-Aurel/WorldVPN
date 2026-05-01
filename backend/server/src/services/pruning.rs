@@ -6,14 +6,14 @@ use tracing::{info, error};
 pub async fn start_pruning_service(pool: PgPool) {
     info!("🧹 Service de nettoyage (TTL pruning) démarré");
     
-    let mut interval = tokio::time::interval(Duration::from_secs(600)); // Toutes les 10 minutes
+    let mut interval = tokio::time::interval(Duration::from_secs(60)); // Toutes les 60 secondes
     
     loop {
         interval.tick().await;
         
-        // 1. Nettoyage des nœuds hors ligne (pas de heartbeat depuis > 1 heure)
+        // 1. Nettoyage des nœuds hors ligne (pas de heartbeat depuis > 5 minutes)
         let node_res = sqlx::query(
-            "DELETE FROM nodes WHERE last_heartbeat < CURRENT_TIMESTAMP - INTERVAL '1 hour'"
+            "DELETE FROM nodes WHERE last_heartbeat < CURRENT_TIMESTAMP - INTERVAL '5 minutes'"
         )
         .execute(&pool)
         .await;
