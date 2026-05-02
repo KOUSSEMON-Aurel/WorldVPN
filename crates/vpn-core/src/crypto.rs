@@ -71,8 +71,10 @@ impl SecretKey {
 }
 
 /// Identité cryptographique (Clé privée Ed25519 de signature)
+/// Peut contenir uniquement une clé publique pour la vérification côté serveur.
 pub struct IdentityKey {
-    signing_key: SigningKey,
+    signing_key: Option<SigningKey>,
+    verifying_key: VerifyingKey,
 }
 
 impl IdentityKey {
@@ -80,62 +82,74 @@ impl IdentityKey {
     pub fn generate() -> Self {
         let mut csprng = OsRng;
         let signing_key = SigningKey::generate(&mut csprng);
-        Self { signing_key }
+        let verifying_key = signing_key.verifying_key();
+        Self { signing_key: Some(signing_key), verifying_key }
     }
 
-    /// Crée une identité à partir de bytes PKCS#8
+    /// Crée une identité à partir de bytes PKCS#8 (clé privée)
     pub fn from_bytes(bytes: &[u8]) -> Result<Self> {
         let signing_key = SigningKey::from_pkcs8_der(bytes)
             .map_err(|e| VpnError::CryptoError(format!("Erreur de décodage identité: {}", e)))?;
-        Ok(Self { signing_key })
+        let verifying_key = signing_key.verifying_key();
+        Ok(Self { signing_key: Some(signing_key), verifying_key })
+    }
+
+    /// Crée une identité publique uniquement à partir d'un hex de clé publique ("ed25519:abcdef...")
+    /// Utile pour la vérification de signature côté serveur sans clé privée.
+    pub fn from_pubkey_hex(pubkey_hex: &str) -> Result<Self> {
+        let hex_part = pubkey_hex
+            .strip_prefix("ed25519:")
+            .ok_or_else(|| VpnError::CryptoError("Prefixe ed25519: manquant".into()))?;
+        let bytes = hex::decode(hex_part)
+            .map_err(|_| VpnError::CryptoError("Hex invalide".into()))?;
+        let verifying_key = VerifyingKey::from_bytes(
+            bytes.as_slice().try_into()
+                .map_err(|_| VpnError::CryptoError("Taille clé invalide".into()))?
+        ).map_err(|_| VpnError::CryptoError("Clé Ed25519 invalide".into()))?;
+        Ok(Self { signing_key: None, verifying_key })
     }
 
     /// Convertit l'identité en bytes PKCS#8 (DOIT ÊTRE STOCKÉ DE FAÇON SÉCURISÉE)
     pub fn to_bytes(&self) -> Result<zeroize::Zeroizing<Vec<u8>>> {
-        let document = self.signing_key.to_pkcs8_der()
+        let sk = self.signing_key.as_ref()
+            .ok_or_else(|| VpnError::CryptoError("Clé privée indisponible (identité publique seulement)".into()))?;
+        let document = sk.to_pkcs8_der()
             .map_err(|e| VpnError::CryptoError(format!("Erreur d'encodage identité: {}", e)))?;
         Ok(zeroize::Zeroizing::new(document.as_bytes().to_vec()))
     }
 
     /// Retourne la clé publique sous forme hex ("ed25519:abcdef...")
     pub fn public_key_hex(&self) -> String {
-        let vk: VerifyingKey = (&self.signing_key).into();
-        format!("ed25519:{}", hex::encode(vk.as_bytes()))
+        format!("ed25519:{}", hex::encode(self.verifying_key.as_bytes()))
     }
 
-    /// Signe un message (ex: un challenge avec timestamp) et retourne la signature en Base64 URL-safe
+    /// Signe un message et retourne la signature en Base64 URL-safe
     pub fn sign_challenge(&self, message: &str) -> String {
-        let signature = self.signing_key.sign(message.as_bytes());
+        let sk = self.signing_key.as_ref().expect("Impossible de signer sans clé privée");
+        let signature = sk.sign(message.as_bytes());
         B64.encode(signature.to_bytes())
     }
 
-    /// Vérifie une signature pour un message et une clé publique donnée
-    pub fn verify_signature(public_key_hex: &str, message: &str, signature_b64: &str) -> bool {
-        let pub_key_bytes = match public_key_hex.strip_prefix("ed25519:") {
-            Some(hex) => match hex::decode(hex) {
-                Ok(b) => b,
-                Err(_) => return false,
-            },
-            None => return false,
-        };
-
-        let vk = match VerifyingKey::from_bytes(pub_key_bytes.as_slice().try_into().unwrap_or(&[0; 32])) {
-            Ok(vk) => vk,
-            Err(_) => return false,
-        };
-
+    /// Vérifie une signature pour cette identité (clé publique)
+    pub fn verify_signature(&self, message: &str, signature_b64: &str) -> bool {
         let sig_bytes = match B64.decode(signature_b64) {
             Ok(b) => b,
             Err(_) => return false,
         };
-
         let signature = match ed25519_dalek::Signature::from_slice(&sig_bytes) {
             Ok(s) => s,
             Err(_) => return false,
         };
-
         use ed25519_dalek::Verifier;
-        vk.verify(message.as_bytes(), &signature).is_ok()
+        self.verifying_key.verify(message.as_bytes(), &signature).is_ok()
+    }
+
+    /// Vérifie une signature à partir d'une clé publique hex (méthode statique)
+    pub fn verify_signature_from_hex(public_key_hex: &str, message: &str, signature_b64: &str) -> bool {
+        match Self::from_pubkey_hex(public_key_hex) {
+            Ok(id) => id.verify_signature(message, signature_b64),
+            Err(_) => false,
+        }
     }
 
     /// Convertit la clé publique Ed25519 en clé publique X25519 (Curve25519)
@@ -212,8 +226,10 @@ impl IdentityKey {
 
         // 1. Convertir la clé privée Ed25519 en X25519
         // Note: ed25519_dalek SigningKey -> X25519 StaticSecret
+        let sk = self.signing_key.as_ref()
+            .ok_or_else(|| VpnError::CryptoError("Clé privée indisponible".into()))?;
         let mut secret_bytes = [0u8; 32];
-        secret_bytes.copy_from_slice(&self.signing_key.to_bytes()[..32]);
+        secret_bytes.copy_from_slice(&sk.to_bytes()[..32]);
         let my_x_secret = StaticSecret::from(secret_bytes);
 
         // 2. Diffie-Hellman

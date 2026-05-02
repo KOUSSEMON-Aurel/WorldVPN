@@ -101,3 +101,10 @@ where
         }
     }
 }
+
+/// Resolves a public key hex string (e.g., "ed25519:abcdef...") into an IdentityKey
+/// suitable for signature verification on the server side (no private key needed).
+pub fn get_identity_from_pubkey(pubkey_hex: &str) -> Result<vpn_core::crypto::IdentityKey, String> {
+    vpn_core::crypto::IdentityKey::from_pubkey_hex(pubkey_hex)
+        .map_err(|e| e.to_string())
+}

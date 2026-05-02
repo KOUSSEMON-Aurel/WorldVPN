@@ -22,9 +22,9 @@ impl GoBridge {
         }
 
         let lib_path = if cfg!(target_os = "linux") {
-            // Path relative to the executable or a standard location
-            // For development, we look into the vpn-core/lib directory
             PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("lib/libvpngo.so")
+        } else if cfg!(target_os = "android") {
+            PathBuf::from("libvpngo.so") // Loaded from app's JNI libs
         } else {
             anyhow::bail!("Unsupported OS for GoBridge");
         };

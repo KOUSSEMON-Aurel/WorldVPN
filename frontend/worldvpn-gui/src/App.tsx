@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react";
-import { Shield, Globe, Wallet, Settings, Power, Activity, Lock, Users, Radio, Cpu, LogOut, History as HistoryIcon, Zap } from "lucide-react";
+import { Shield, Globe, Wallet, Settings, Power, Activity, Lock, Users, Radio, LogOut, Zap } from "lucide-react";
 import { motion, AnimatePresence } from "framer-motion";
 import { invoke } from "@tauri-apps/api/core";
 import "./App.css";
@@ -50,8 +50,6 @@ interface User {
 
 function App() {
   const [user, setUser] = useState<User | null>(null);
-  const [authMode, setAuthMode] = useState<"login" | "register">("login");
-  const [privateKeyInput, setPrivateKeyInput] = useState("");
   const [activeTab, setActiveTab] = useState<Tab>("home");
   const [status, setStatus] = useState<ConnectionStatus>("disconnected");
   const [isSharing, setIsSharing] = useState(true);
@@ -59,7 +57,7 @@ function App() {
   const [nodeGroup, setNodeGroup] = useState<NodeGroup>("COMMUNITY");
   const [traffic, setTraffic] = useState({ down: 0, up: 0 });
   const [p2pStats, setP2pStats] = useState({ connected_peers: 0, known_nodes: 0, total_sent: 0, total_received: 0 });
-  const [error, setError] = useState<string | null>(null);
+  const [showKey, setShowKey] = useState(false);
 
   // Poll P2P Stats
   useEffect(() => {
@@ -75,17 +73,23 @@ function App() {
     return () => clearInterval(interval);
   }, [isSharing]);
 
-  // Auto-login if private key is in localStorage
+  // Auto-login or Register if no key
   useEffect(() => {
-    const savedKey = localStorage.getItem("worldvpn_private_key");
-    if (savedKey) {
-      try {
-        const keyArray = JSON.parse(savedKey);
-        loginWithKey(keyArray);
-      } catch (e) {
-        console.error("Failed to auto-login", e);
+    const initIdentity = async () => {
+      const savedKey = localStorage.getItem("worldvpn_private_key");
+      if (savedKey) {
+        try {
+          const keyArray = JSON.parse(savedKey);
+          await loginWithKey(keyArray);
+        } catch (e) {
+          console.error("Failed to auto-login", e);
+          await handleRegister();
+        }
+      } else {
+        await handleRegister();
       }
-    }
+    };
+    initIdentity();
   }, []);
 
   // Simulate real-time traffic when connected
@@ -114,7 +118,7 @@ function App() {
       });
       localStorage.setItem("worldvpn_private_key", JSON.stringify(keyArray));
     } catch (e: any) {
-      setError(e.toString());
+      console.error("Login failed", e);
     }
   };
 
@@ -123,38 +127,13 @@ function App() {
       const identity: any = await invoke("generate_identity");
       await loginWithKey(identity.private_key);
     } catch (e: any) {
-      setError("Failed to generate identity: " + e.toString());
+      console.error("Failed to generate identity", e);
     }
-  };
-
-  const handleAuth = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setError(null);
-    if (authMode === 'register') {
-      await handleRegister();
-    } else {
-      try {
-        const keyArray = JSON.parse(privateKeyInput);
-        await loginWithKey(keyArray);
-      } catch (e) {
-        setError("Invalid Access Key format (must be JSON array of bytes)");
-      }
-    }
-  };
-
-  const handleGuestLogin = () => {
-    setUser({
-      username: "Guest",
-      credits: 0,
-      token: "guest-token"
-    });
-    setNodeGroup("PUBLIC");
   };
 
   const handleLogout = () => {
     setUser(null);
     localStorage.removeItem("worldvpn_private_key");
-    setPrivateKeyInput("");
   };
 
   // Fetch nodes from backend
@@ -195,77 +174,11 @@ function App() {
 
   if (!user) {
     return (
-      <div className="flex h-screen w-screen bg-background items-center justify-center relative overflow-hidden p-6">
-        <div className="absolute inset-0 bg-[radial-gradient(circle_at_center,_var(--tw-gradient-stops))] from-primary/10 to-background opacity-50" />
-
-        <motion.div
-          initial={{ y: 20, opacity: 0 }}
-          animate={{ y: 0, opacity: 1 }}
-          className="z-10 w-full max-w-md bg-surface/60 backdrop-blur-2xl border border-white/10 rounded-[2rem] p-10 shadow-2xl"
-        >
-          <div className="flex flex-col items-center mb-8">
-            <div className="w-20 h-20 bg-primary/10 border border-primary/20 rounded-3xl flex items-center justify-center mb-4 shadow-[0_0_30px_rgba(0,242,234,0.1)]">
-              <Shield className="w-10 h-10 text-primary" />
-            </div>
-            <h1 className="text-3xl font-bold text-white tracking-tighter">WorldVPN</h1>
-            <p className="text-text-muted text-sm mt-2">P2P Anonymous Identity</p>
-          </div>
-
-          <form onSubmit={handleAuth} className="space-y-4">
-            {error && (
-              <div className="p-3 bg-danger/10 border border-danger/20 rounded-xl text-danger text-xs font-medium">
-                {error}
-              </div>
-            )}
-
-            {authMode === 'login' && (
-              <div className="space-y-1">
-                <label className="text-[10px] font-bold text-text-muted uppercase ml-1">Access Key (JSON Byte Array)</label>
-                <textarea
-                  value={privateKeyInput}
-                  onChange={(e) => setPrivateKeyInput(e.target.value)}
-                  className="w-full h-24 bg-white/5 border border-white/10 rounded-xl px-4 py-3 text-white focus:border-primary/50 outline-none transition-all font-mono text-[10px]"
-                  placeholder="[1, 2, 3, ...]"
-                  required
-                />
-              </div>
-            )}
-
-            {authMode === 'register' && (
-              <div className="p-4 bg-primary/5 border border-primary/10 rounded-2xl text-center mb-4">
-                <p className="text-xs text-text-muted">Registering will generate a unique Ed25519 identity key. No email or password required.</p>
-              </div>
-            )}
-
-            <button type="submit" className="w-full bg-primary text-background font-bold py-4 rounded-xl mt-4 hover:scale-[1.02] active:scale-[0.98] transition-all shadow-[0_0_20px_rgba(0,242,234,0.3)]">
-              {authMode === 'login' ? 'RESTORE IDENTITY' : 'GENERATE NEW IDENTITY'}
-            </button>
-          </form>
-
-          <div className="mt-8 flex justify-center gap-2 text-xs">
-            <span className="text-text-muted">
-              {authMode === 'login' ? "Don't have an identity?" : "Already have a key?"}
-            </span>
-            <button
-              onClick={() => setAuthMode(authMode === 'login' ? 'register' : 'login')}
-              className="text-primary font-bold hover:underline"
-            >
-              {authMode === 'login' ? "Register Now" : "Login Here"}
-            </button>
-          </div>
-
-          <div className="mt-4 flex justify-center text-xs">
-            <button
-              onClick={handleGuestLogin}
-              className="text-text-muted hover:text-white transition-colors"
-            >
-              Access as Guest
-            </button>
-          </div>
-        </motion.div>
-
-        <div className="absolute top-10 left-10 opacity-20 font-mono text-[10px] text-primary">
-          IDENTITY_MODE: ED25519<br />P2P_NETWORK: CONNECTING<br />ZERO_LOG: ACTIVE
+      <div className="flex h-screen w-screen bg-background items-center justify-center p-6">
+        <div className="flex flex-col items-center gap-4">
+          <Shield className="w-12 h-12 text-primary animate-pulse" />
+          <h1 className="text-xl font-bold text-white">Initializing WorldVPN...</h1>
+          <p className="text-text-muted text-sm">Synchronizing Secure Identity</p>
         </div>
       </div>
     );
@@ -483,17 +396,82 @@ function App() {
             {activeTab === 'settings' && (
               <motion.div key="settings" initial={{ opacity: 0, x: 20 }} animate={{ opacity: 1, x: 0 }} exit={{ opacity: 0, x: -20 }} className="absolute inset-0 p-8 overflow-y-auto">
                 <h2 className="text-2xl font-bold text-white mb-6">Settings</h2>
-                <div className="bg-surface/30 border border-white/10 rounded-3xl p-6">
-                  <div className="flex items-center gap-4 mb-6">
-                    <div className="w-16 h-16 rounded-2xl bg-primary/20 flex items-center justify-center">
-                      <Users className="w-8 h-8 text-primary" />
+                <div className="flex flex-col gap-6">
+                  <div className="bg-surface/30 border border-white/10 rounded-3xl p-6">
+                    <div className="flex items-center gap-4 mb-6">
+                      <div className="w-16 h-16 rounded-2xl bg-primary/20 flex items-center justify-center">
+                        <Users className="w-8 h-8 text-primary" />
+                      </div>
+                      <div className="flex-1">
+                        <div className="text-lg font-bold text-white">{user.username}</div>
+                        <div className="text-xs text-text-muted font-mono truncate max-w-[300px]">{user.publicKey || 'Anonymous'}</div>
+                      </div>
                     </div>
-                    <div>
-                      <div className="text-lg font-bold text-white">{user.username}</div>
-                      <div className="text-xs text-text-muted font-mono">{user.publicKey || 'Anonymous'}</div>
+
+                    <div className="space-y-4">
+                      <div>
+                        <label className="text-[10px] font-bold text-text-muted uppercase mb-2 block">Secure Identity Key</label>
+                        <div className="flex gap-2">
+                          <input
+                            type={showKey ? "text" : "password"}
+                            readOnly
+                            value={localStorage.getItem("worldvpn_private_key") || ""}
+                            className="flex-1 bg-white/5 border border-white/10 rounded-lg px-3 py-2 text-xs font-mono text-white outline-none"
+                          />
+                          <button
+                            onClick={() => setShowKey(!showKey)}
+                            className="bg-white/10 hover:bg-white/20 px-3 rounded-lg text-[10px] font-bold transition-colors"
+                          >
+                            {showKey ? "HIDE" : "SHOW"}
+                          </button>
+                        </div>
+                      </div>
+
+                      <div className="pt-4 border-t border-white/5 flex flex-wrap gap-3">
+                        <button
+                          onClick={() => {
+                            const val = prompt("Paste your Identity Key (JSON array of bytes):");
+                            if (val) {
+                              try {
+                                const key = JSON.parse(val);
+                                loginWithKey(key);
+                              } catch (e) {
+                                alert("Invalid key format");
+                              }
+                            }
+                          }}
+                          className="text-primary text-xs font-bold hover:underline"
+                        >
+                          Restore Identity
+                        </button>
+                        <button
+                          onClick={async () => {
+                            if (confirm("Are you sure? This will generate a new identity and you will lose access to your current account credits unless you have backed up your key.")) {
+                              await handleRegister();
+                            }
+                          }}
+                          className="text-secondary text-xs font-bold hover:underline"
+                        >
+                          Regenerate Identity
+                        </button>
+                        <button
+                          onClick={handleLogout}
+                          className="text-danger text-xs font-bold ml-auto"
+                        >
+                          Clear Session
+                        </button>
+                      </div>
                     </div>
                   </div>
-                  <button onClick={handleLogout} className="text-danger font-bold hover:underline">Logout Session</button>
+
+                  <div className="bg-surface/30 border border-white/10 rounded-3xl p-6">
+                    <h3 className="text-sm font-bold text-white mb-4">About WorldVPN</h3>
+                    <div className="space-y-2 text-xs text-text-muted">
+                      <p>Version: 0.1.0-alpha</p>
+                      <p>Protocol: Unified sing-box (Go)</p>
+                      <p>Identity: Ed25519 Elliptic Curve</p>
+                    </div>
+                  </div>
                 </div>
               </motion.div>
             )}
@@ -504,7 +482,7 @@ function App() {
   );
 }
 
-function NavIcon({ icon: Icon, active, onClick, label }: any) {
+function NavIcon({ icon: Icon, active, onClick }: any) {
   return (
     <div className="relative group cursor-pointer w-12 h-12 flex items-center justify-center" onClick={onClick}>
       {active && <motion.div layoutId="activeNav" className="absolute inset-0 bg-primary/10 rounded-xl border border-primary/30" />}

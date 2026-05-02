@@ -1,8 +1,11 @@
+import 'dart:convert';
 import 'dart:ui';
 import 'package:flutter/material.dart';
 import 'package:lucide_icons/lucide_icons.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:go_router/go_router.dart';
+import '../../rust_gen/api/simple.dart' as rust;
 import '../../store/settings_provider.dart';
 
 class SettingsScreen extends ConsumerWidget {
@@ -40,6 +43,11 @@ class SettingsScreen extends ConsumerWidget {
                     size: 16, color: Colors.grey),
                 onTap: () => context.push('/settings/profile'),
               ),
+              const SizedBox(height: 16),
+
+              // Identity Management Section
+              _buildSectionHeader("Security & Identity"),
+              _buildIdentityCard(context),
               const SizedBox(height: 24),
 
               // VPN Settings
@@ -99,6 +107,10 @@ class SettingsScreen extends ConsumerWidget {
         }),
       ),
     );
+  }
+
+  Widget _buildIdentityCard(BuildContext context) {
+    return const IdentityCard();
   }
 
   void _showProtocolDialog(BuildContext context, WidgetRef ref) {
@@ -272,5 +284,165 @@ class SettingsScreen extends ConsumerWidget {
         activeThumbColor: const Color(0xFF00F2EA),
       ),
     );
+  }
+}
+
+class IdentityCard extends StatefulWidget {
+  const IdentityCard({super.key});
+
+  @override
+  State<IdentityCard> createState() => _IdentityCardState();
+}
+
+class _IdentityCardState extends State<IdentityCard> {
+  bool isObscured = true;
+
+  @override
+  Widget build(BuildContext context) {
+    return FutureBuilder<SharedPreferences>(
+      future: SharedPreferences.getInstance(),
+      builder: (context, snapshot) {
+        if (!snapshot.hasData) return const SizedBox.shrink();
+        final prefs = snapshot.data!;
+        final keyBase64 = prefs.getString('identity_key') ?? "";
+
+        return Container(
+          padding: const EdgeInsets.all(20),
+          decoration: BoxDecoration(
+            color: Colors.white.withValues(alpha: 0.03),
+            borderRadius: BorderRadius.circular(24),
+            border: Border.all(color: Colors.white.withValues(alpha: 0.05)),
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  const Text("ACTIVE IDENTITY KEY",
+                      style: TextStyle(
+                          fontSize: 10,
+                          fontWeight: FontWeight.bold,
+                          color: Colors.grey,
+                          letterSpacing: 1)),
+                  IconButton(
+                    icon: Icon(
+                        isObscured ? LucideIcons.eye : LucideIcons.eyeOff,
+                        size: 14,
+                        color: Colors.grey),
+                    onPressed: () => setState(() => isObscured = !isObscured),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 8),
+              Container(
+                width: double.infinity,
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                decoration: BoxDecoration(
+                  color: Colors.black.withValues(alpha: 0.2),
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                child: Text(
+                  isObscured ? "••••••••••••••••••••••••••••" : keyBase64,
+                  style: const TextStyle(
+                      fontFamily: 'monospace',
+                      fontSize: 10,
+                      color: Colors.white70),
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ),
+              const SizedBox(height: 16),
+              Row(
+                children: [
+                  TextButton(
+                    onPressed: () => _handleRestoreIdentity(context, prefs),
+                    child: const Text("IMPORT",
+                        style: TextStyle(
+                            fontSize: 10,
+                            fontWeight: FontWeight.bold,
+                            color: Color(0xFF00F2EA))),
+                  ),
+                  TextButton(
+                    onPressed: () => _handleRegenerateIdentity(context, prefs),
+                    child: const Text("REGENERATE",
+                        style: TextStyle(
+                            fontSize: 10,
+                            fontWeight: FontWeight.bold,
+                            color: Color(0xFF7000FF))),
+                  ),
+                ],
+              ),
+            ],
+          ),
+        );
+      },
+    );
+  }
+
+  void _handleRestoreIdentity(
+      BuildContext context, SharedPreferences prefs) async {
+    final controller = TextEditingController();
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text("Import Identity"),
+        content: TextField(
+          controller: controller,
+          decoration: const InputDecoration(labelText: "Private Key (Base64)"),
+        ),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.pop(context),
+              child: const Text("CANCEL")),
+          TextButton(
+            onPressed: () async {
+              if (controller.text.isNotEmpty) {
+                await prefs.setString('identity_key', controller.text);
+                await rust.loginAnonymously(
+                    privateKeyBytes: base64Decode(controller.text));
+                if (context.mounted) {
+                  setState(() {});
+                  Navigator.pop(context);
+                }
+              }
+            },
+            child: const Text("IMPORT"),
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _handleRegenerateIdentity(
+      BuildContext context, SharedPreferences prefs) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text("Regenerate Identity?"),
+        content: const Text(
+            "This will replace your current identity. You will lose access to your current account credits."),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.pop(context, false),
+              child: const Text("CANCEL")),
+          TextButton(
+              onPressed: () => Navigator.pop(context, true),
+              child: const Text("REGENERATE")),
+        ],
+      ),
+    );
+
+    if (confirmed == true) {
+      final newKey = await rust.generateIdentity();
+      await prefs.setString('identity_key', base64Encode(newKey));
+      await rust.loginAnonymously(privateKeyBytes: newKey);
+      if (context.mounted) {
+        setState(() {});
+        ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text("New Identity Generated")));
+      }
+    }
   }
 }

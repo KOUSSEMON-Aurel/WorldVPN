@@ -49,7 +49,13 @@ case $DEVICE_ABI in
     ;;
 esac
 
-# 2. Build Rust Library for the target
+# 2. Build Go Unified Protocol Engine
+echo "🐹 Building Go libvpngo.so for Android..."
+cd "$SCRIPT_DIR/vpn-go"
+make android-all
+# The Makefile already exports to jniLibs/arm64-v8a and jniLibs/x86_64
+
+# 3. Build Rust Library for the target integrating the GoBridge
 echo "🦀 Building Rust core for $RUST_TARGET..."
 mkdir -p "$JNILIBS_DIR/$ABI_DIR"
 cd "$SCRIPT_DIR/crates/vpn-core"
@@ -58,7 +64,7 @@ cargo ndk -t "$RUST_TARGET" build --release
 # Copy the built library to jniLibs
 cp "../../target/$RUST_TARGET/release/libvpn_core.so" "$MOBILE_DIR/$JNILIBS_DIR/$ABI_DIR/"
 
-# 3. Build and Install Flutter App
+# 4. Build and Install Flutter App
 cd "$MOBILE_DIR"
 echo "🛠️  Building Flutter APK (Debug)..."
 flutter build apk --debug

@@ -1,5 +1,4 @@
 import 'package:go_router/go_router.dart';
-import 'screens/login_screen.dart';
 import 'screens/home_screen.dart';
 import 'screens/map_screen.dart';
 import 'screens/wallet_screen.dart';
@@ -8,12 +7,8 @@ import 'screens/profile_screen.dart';
 import 'layout/scaffold_with_nav.dart';
 
 final router = GoRouter(
-  initialLocation: '/login',
+  initialLocation: '/home',
   routes: [
-    GoRoute(
-      path: '/login',
-      builder: (context, state) => const LoginScreen(),
-    ),
     StatefulShellRoute.indexedStack(
       builder: (context, state, navigationShell) {
         return ScaffoldWithNavBar(navigationShell: navigationShell);

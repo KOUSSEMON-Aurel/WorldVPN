@@ -1,6 +1,8 @@
+import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'ui/router.dart';
 import 'rust_gen/frb_generated.dart';
 import 'rust_gen/api/simple.dart' as rust;
@@ -17,12 +19,40 @@ void main() async {
     // Configurer l'URL du backend de production
     await rust.setBackendUrl(url: "https://worldvpn-backend.onrender.com");
     debugPrint("🌐 Backend URL set to production");
+
+    // Auto-login silencieux: génère ou restaure l'identité
+    _silentLogin();
   } catch (e, stack) {
     debugPrint("❌ CRITICAL: Rust Initialization failed: $e");
     debugPrint(stack.toString());
   }
 
   runApp(const ProviderScope(child: WorldVpnApp()));
+}
+
+/// Génère une nouvelle identité (si inexistante) et s'authentifie silencieusement.
+/// Non-bloquant — les erreurs sont loguées uniquement.
+Future<void> _silentLogin() async {
+  try {
+    final prefs = await SharedPreferences.getInstance();
+    List<int> privateKeyBytes;
+
+    final keyBase64 = prefs.getString('identity_key');
+    if (keyBase64 == null) {
+      privateKeyBytes = await rust.generateIdentity();
+      await prefs.setString('identity_key', base64Encode(privateKeyBytes));
+      debugPrint("🔑 New identity generated");
+    } else {
+      privateKeyBytes = base64Decode(keyBase64);
+      debugPrint("🔑 Identity restored from storage");
+    }
+
+    await rust.loginAnonymously(privateKeyBytes: privateKeyBytes);
+    debugPrint("✅ Anonymous login successful");
+  } catch (e) {
+    // Non-fatal: the user can still browse the app; connection will fail gracefully
+    debugPrint("⚠️ Silent login failed (backend unreachable?): $e");
+  }
 }
 
 class WorldVpnApp extends StatelessWidget {
