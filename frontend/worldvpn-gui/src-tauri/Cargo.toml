@@ -23,6 +23,6 @@ tracing-subscriber = "0.3"
 
 # Local core library
 vpn-core = { path = "../../../crates/vpn-core" }
-
+hex = "0.4"
 rand = "0.8"
 chrono = { version = "0.4", features = ["serde"] }

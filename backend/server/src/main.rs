@@ -42,6 +42,11 @@ async fn main() -> anyhow::Result<()> {
         services::vpngate::start_vpngate_sync(vpngate_pool).await;
     });
 
+    let pruning_pool = db_pool.clone();
+    tokio::spawn(async move {
+        services::pruning::start_pruning_service(pruning_pool).await;
+    });
+
     // Liveness probe on startup
     sqlx::query("SELECT 1").execute(&db_pool).await.expect("DB Health check failed");
 

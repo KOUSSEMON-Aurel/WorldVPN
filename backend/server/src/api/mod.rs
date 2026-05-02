@@ -15,7 +15,8 @@ pub fn router(state: AppState) -> Router {
         
         // Authentication
         .route("/auth/login", post(auth::login))
-        .route("/auth/register", post(auth::register))
+        .route("/auth/identity", post(auth::identity_login))
+        .route("/auth/migrate", post(auth::migrate_credits))
         
         // VPN connection
         .route("/vpn/connect", post(vpn::connect))
@@ -25,12 +26,14 @@ pub fn router(state: AppState) -> Router {
         .route("/credits/balance", get(credits::get_balance))
         .route("/credits/history", get(credits::get_history))
         .route("/credits/sync", post(credits::sync_traffic))
+        .route("/credits/submit", post(credits::submit_receipt))
         
         // P2P Node management
         .route("/nodes/register", post(nodes::register_node))
         .route("/nodes/discover", get(nodes::discover_nodes))
         .route("/nodes/heartbeat", post(nodes::heartbeat))
         .route("/nodes/offline", post(nodes::go_offline))
+        .route("/nodes/public", get(nodes::public_nodes))
         .route("/nodes/my", get(nodes::my_node))
         
         // Transparency dashboard (real-time monitoring)

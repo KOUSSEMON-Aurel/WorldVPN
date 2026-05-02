@@ -7,8 +7,8 @@ import '../frb_generated.dart';
 import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
 
 // These functions are ignored because they are not marked as `pub`: `get_backend_url`, `send_status`
-// These types are ignored because they are neither used by any `pub` functions nor (for structs and enums) marked `#[frb(unignore)]`: `AUTH_TOKEN`, `BACKEND_URL`, `ConnectionStatus`, `IS_SHARING`, `LOGGED_USER`, `MobileVpnState`, `STATUS_STREAM`
-// These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `assert_receiver_is_total_eq`, `clone`, `clone`, `clone`, `deref`, `deref`, `deref`, `deref`, `deref`, `eq`, `fmt`, `fmt`, `fmt`, `initialize`, `initialize`, `initialize`, `initialize`, `initialize`
+// These types are ignored because they are neither used by any `pub` functions nor (for structs and enums) marked `#[frb(unignore)]`: `AUTH_TOKEN`, `BACKEND_URL`, `ConnectionStatus`, `IS_SHARING`, `LOGGED_USER`, `MobileVpnState`, `SHARING_TASK`, `STATUS_STREAM`
+// These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `assert_receiver_is_total_eq`, `clone`, `clone`, `clone`, `deref`, `deref`, `deref`, `deref`, `deref`, `deref`, `eq`, `fmt`, `fmt`, `fmt`, `initialize`, `initialize`, `initialize`, `initialize`, `initialize`, `initialize`
 
 Future<void> setBackendUrl({required String url}) =>
     RustLib.instance.api.crateApiSimpleSetBackendUrl(url: url);
@@ -16,15 +16,21 @@ Future<void> setBackendUrl({required String url}) =>
 Future<String> greet({required String name}) =>
     RustLib.instance.api.crateApiSimpleGreet(name: name);
 
-Future<String> loginUser(
-        {required String username, required String password}) =>
-    RustLib.instance.api
-        .crateApiSimpleLoginUser(username: username, password: password);
+Future<Uint8List> generateIdentity() =>
+    RustLib.instance.api.crateApiSimpleGenerateIdentity();
 
-Future<void> startVpnConnection(
-        {required String protocolStr, required String countryCode}) =>
-    RustLib.instance.api.crateApiSimpleStartVpnConnection(
-        protocolStr: protocolStr, countryCode: countryCode);
+Future<String> loginAnonymously({required List<int> privateKeyBytes}) =>
+    RustLib.instance.api
+        .crateApiSimpleLoginAnonymously(privateKeyBytes: privateKeyBytes);
+
+Future<String> startVpnMatchmaking(
+        {required String protocolStr,
+        required String countryCode,
+        required String nodeGroup}) =>
+    RustLib.instance.api.crateApiSimpleStartVpnMatchmaking(
+        protocolStr: protocolStr,
+        countryCode: countryCode,
+        nodeGroup: nodeGroup);
 
 Future<void> startSharing() =>
     RustLib.instance.api.crateApiSimpleStartSharing();
@@ -38,6 +44,9 @@ Future<void> stopVpnConnection() =>
 
 Stream<VpnStatusEvent> registerStatusStream() =>
     RustLib.instance.api.crateApiSimpleRegisterStatusStream();
+
+Future<PlatformInt64> getWalletBalance() =>
+    RustLib.instance.api.crateApiSimpleGetWalletBalance();
 
 class VpnStatusEvent {
   final String status;

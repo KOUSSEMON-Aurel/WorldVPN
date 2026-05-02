@@ -94,11 +94,14 @@ pub async fn connect(
         Ok(Some(row)) => {
             let nid: String = row.get("id");
             let country: String = row.get("country_code");
-            let _ip_hash: String = row.get("public_ip_hash");
-            // In production: decrypt actual IP from ip_hash
-            // For Hole Punching, we need real IPv4/IPv6 instead of hostname
-            let simulated_ip = format!("198.51.100.{}", (nid.as_bytes()[0] % 200) + 10);
-            let ep = format!("{}:51820", simulated_ip);
+            let public_endpoint: Option<String> = row.try_get("public_endpoint").ok();
+            
+            // Use real STUN endpoint if available, otherwise fallback to simulated (for legacy)
+            let ep = public_endpoint.unwrap_or_else(|| {
+                let simulated_ip = format!("198.51.100.{}", (nid.as_bytes()[0] % 200) + 10);
+                format!("{}:51820", simulated_ip)
+            });
+            
             (Some(nid), Some(country), ep, false)
         }
         _ => {
@@ -187,9 +190,25 @@ pub async fn connect(
 
     tracing::info!("Session created: {} -> {} via {:?}", session_id, endpoint, payload.protocol);
 
+    // Chiffrement E2E de l'endpoint si une clé publique est fournie (Phase 4)
+    let final_endpoint = if let Some(ref pubkey) = payload.public_key {
+        match vpn_core::crypto::IdentityKey::encrypt_for_identity(&endpoint, pubkey) {
+            Ok(enc) => {
+                tracing::info!("Endpoint chiffré pour le client {}", pubkey);
+                format!("e2e:{}", enc)
+            },
+            Err(e) => {
+                tracing::error!("Erreur chiffrement endpoint: {}", e);
+                endpoint
+            }
+        }
+    } else {
+        endpoint
+    };
+
     let response = ConnectResponse {
         session_id,
-        server_endpoint: endpoint,
+        server_endpoint: final_endpoint,
         assigned_ip: virtual_ip,
         server_public_key: credentials,
         node_country,

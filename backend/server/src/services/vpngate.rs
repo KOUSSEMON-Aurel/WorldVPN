@@ -35,7 +35,10 @@ async fn sync_nodes(pool: &PgPool) -> anyhow::Result<()> {
     let mut nodes_added = 0;
     
     for result in rdr.records() {
-        let record = result?;
+        let record = match result {
+            Ok(r) => r,
+            Err(_) => continue, // Ignore malformed lines or the footer comment
+        };
         
         // CSV columns: #HostName,IP,Score,Ping,Speed,CountryLong,CountryShort,NumVpnSessions,Uptime,TotalUsers,TotalTraffic,LogType,Operator,Message,OpenVPN_ConfigData_Base64
         if record.len() < 15 { continue; }

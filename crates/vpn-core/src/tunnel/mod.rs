@@ -7,7 +7,12 @@ use crate::error::Result;
 use crate::protocol::VpnProtocol;
 
 pub mod windows;
+pub mod external;
+pub mod go_bridge;
+pub mod go_tunnel;
 pub use windows::WindowsTunnel;
+pub use external::ExternalTunnel;
+pub use go_tunnel::GoTunnel;
 
 /// Provides a handle to an active VPN tunnel connection
 #[derive(Debug, Clone)]
@@ -90,7 +95,7 @@ pub trait VpnTunnel: Send + Sync {
     /// Returns the latest performance statistics
     fn stats(&self) -> TunnelStats;
 
-    /// Triggers protocol-specific roaming (e.g., MOBIKE for IKEv2)
+    /// Triggers protocol-specific roaming (e.g., Mobike-like behavior for WireGuard)
     async fn handle_network_change(&mut self, _new_interface: Interface) -> Result<()> {
         Ok(())
     }

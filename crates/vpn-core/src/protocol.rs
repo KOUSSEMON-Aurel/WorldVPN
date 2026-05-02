@@ -9,12 +9,6 @@ pub enum VpnProtocol {
     WireGuardObfuscated,
     /// Traditional proxy protocol used to bypass filters
     Shadowsocks,
-    /// Reliable tunnel over TCP/443
-    OpenVpnTcp,
-    /// High-performance traditional tunnel (UDP)
-    OpenVpnUdp,
-    /// IPsec-based protocol, often used on mobile
-    IKEv2,
     /// High-performance QUIC-based protocol for unstable links
     Hysteria2,
     /// Modern anti-censorship protocol (TLS-mimicry)
@@ -29,9 +23,6 @@ impl VpnProtocol {
             VpnProtocol::WireGuard => "WireGuard",
             VpnProtocol::WireGuardObfuscated => "WireGuard Obfuscated",
             VpnProtocol::Shadowsocks => "Shadowsocks",
-            VpnProtocol::OpenVpnTcp => "OpenVPN (TCP)",
-            VpnProtocol::OpenVpnUdp => "OpenVPN (UDP)",
-            VpnProtocol::IKEv2 => "IKEv2",
             VpnProtocol::Hysteria2 => "Hysteria2",
             VpnProtocol::Trojan => "Trojan",
             VpnProtocol::VLESS => "VLESS",
@@ -43,9 +34,7 @@ impl VpnProtocol {
         match self {
             VpnProtocol::WireGuard | VpnProtocol::WireGuardObfuscated => 51820,
             VpnProtocol::Shadowsocks => 8388,
-            VpnProtocol::OpenVpnTcp | VpnProtocol::Trojan | VpnProtocol::VLESS => 443,
-            VpnProtocol::OpenVpnUdp => 1194,
-            VpnProtocol::IKEv2 => 500,
+            VpnProtocol::Trojan | VpnProtocol::VLESS => 443,
             VpnProtocol::Hysteria2 => 32400,
         }
     }
@@ -67,12 +56,9 @@ impl VpnProtocol {
         match self {
             VpnProtocol::WireGuard => 1.0,
             VpnProtocol::Hysteria2 => 0.95,
-            VpnProtocol::IKEv2 => 0.9,
             VpnProtocol::Shadowsocks => 0.85,
-            VpnProtocol::OpenVpnUdp => 0.8,
             VpnProtocol::WireGuardObfuscated => 0.75,
             VpnProtocol::Trojan | VpnProtocol::VLESS => 0.7,
-            VpnProtocol::OpenVpnTcp => 0.6,
         }
     }
 
@@ -84,8 +70,7 @@ impl VpnProtocol {
             VpnProtocol::Hysteria2 => 0.9,
             VpnProtocol::Shadowsocks => 0.85,
             VpnProtocol::WireGuardObfuscated => 0.8,
-            VpnProtocol::OpenVpnTcp => 0.6,
-            VpnProtocol::OpenVpnUdp | VpnProtocol::WireGuard | VpnProtocol::IKEv2 => 0.3,
+            VpnProtocol::WireGuard => 0.3,
         }
     }
 }

@@ -188,20 +188,35 @@ pub async fn discover_nodes(
     }
 }
 
+#[derive(Deserialize)]
+pub struct HeartbeatRequest {
+    pub nat_type: Option<String>,
+    pub current_connections: Option<i32>,
+    pub public_endpoint: Option<String>,
+}
+
 /// POST /nodes/heartbeat - Keep node alive and update status
 pub async fn heartbeat(
     State(state): State<AppState>,
     AuthUser(user): AuthUser,
+    Json(payload): Json<HeartbeatRequest>,
 ) -> impl IntoResponse {
     let pool = state.db.as_ref().expect("DB not initialized");
 
     let result = sqlx::query(
         r#"UPDATE nodes 
-           SET last_heartbeat = CURRENT_TIMESTAMP, is_online = TRUE
+           SET last_heartbeat = CURRENT_TIMESTAMP, 
+               is_online = TRUE,
+               nat_type = COALESCE($2, nat_type),
+               current_connections = COALESCE($3, current_connections),
+               public_endpoint = COALESCE($4, public_endpoint)
            WHERE user_id = $1
            RETURNING id, current_connections"#
     )
     .bind(&user.sub)
+    .bind(payload.nat_type)
+    .bind(payload.current_connections)
+    .bind(payload.public_endpoint)
     .fetch_optional(pool)
     .await;
 
@@ -284,6 +299,46 @@ pub async fn my_node(
             (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({
                 "error": e.to_string()
             }))).into_response()
+        }
+    }
+}
+
+/// GET /nodes/public - Get curated list of public (VPNGate) nodes
+pub async fn public_nodes(
+    State(state): State<AppState>,
+) -> impl IntoResponse {
+    let pool = state.db.as_ref().expect("DB not initialized");
+    
+    let result = sqlx::query(
+        r#"SELECT id, country_code, available_bandwidth_mbps, protocols, public_config_data
+           FROM nodes 
+           WHERE node_group = 'PUBLIC' AND is_online = TRUE 
+           ORDER BY created_at DESC 
+           LIMIT 50"#
+    )
+    .fetch_all(pool)
+    .await;
+
+    match result {
+        Ok(rows) => {
+            let nodes: Vec<serde_json::Value> = rows.iter().map(|row| {
+                json!({
+                    "id": row.get::<String, _>("id"),
+                    "country_code": row.get::<String, _>("country_code"),
+                    "bandwidth_mbps": row.get::<i32, _>("available_bandwidth_mbps"),
+                    "protocols": row.get::<String, _>("protocols"),
+                    "config": row.get::<Option<String>, _>("public_config_data")
+                })
+            }).collect();
+
+            (StatusCode::OK, Json(json!({
+                "nodes": nodes,
+                "count": nodes.len()
+            }))).into_response()
+        }
+        Err(e) => {
+            tracing::error!("Public node fetch failed: {}", e);
+            (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({ "error": "Failed to fetch public nodes" }))).into_response()
         }
     }
 }
