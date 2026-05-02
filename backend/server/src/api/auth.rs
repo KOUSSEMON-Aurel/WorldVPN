@@ -115,7 +115,7 @@ pub async fn identity_login(
 
     // 1. Vérification de la signature
     use vpn_core::crypto::IdentityKey;
-    if !IdentityKey::verify_signature(&payload.public_key, &payload.timestamp, &payload.signature) {
+    if !IdentityKey::verify_signature_from_hex(&payload.public_key, &payload.timestamp, &payload.signature) {
         return (
             StatusCode::UNAUTHORIZED,
             Json(json!({"error": "Invalid signature"})),
@@ -218,7 +218,7 @@ pub async fn migrate_credits(
 
     // 1. Vérification de la signature (Preuve de possession de l'ancienne clé)
     use vpn_core::crypto::IdentityKey;
-    if !IdentityKey::verify_signature(&payload.old_public_key, &payload.new_public_key, &payload.signature_old) {
+    if !IdentityKey::verify_signature_from_hex(&payload.old_public_key, &payload.new_public_key, &payload.signature_old) {
         return (
             StatusCode::UNAUTHORIZED,
             Json(json!({"error": "Invalid migration signature"})),

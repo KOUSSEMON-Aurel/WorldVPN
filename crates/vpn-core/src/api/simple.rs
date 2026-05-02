@@ -182,7 +182,7 @@ pub fn start_vpn_matchmaking(protocol_str: String, country_code: String, node_gr
         
         let config_json = serde_json::to_string(&serde_json::Value::Object(map))?;
         
-        #[cfg(target_os = "linux")]
+        #[cfg(any(target_os = "linux", target_os = "android"))]
         {
             let tunnel = crate::tunnel::go_tunnel::GoTunnel::new(conn_info.session_id.clone(), chosen_protocol);
             let _config = crate::tunnel::ConnectionConfig {
@@ -196,6 +196,7 @@ pub fn start_vpn_matchmaking(protocol_str: String, country_code: String, node_gr
             };
             
             // Note: assigned_ip and other details are already in map/config_json
+            #[cfg(target_os = "linux")]
             crate::tunnel::go_bridge::GoBridge::start_tunnel(0, &config_json)?;
             
             if let Ok(mut guard) = ACTIVE_TUNNEL.lock() {

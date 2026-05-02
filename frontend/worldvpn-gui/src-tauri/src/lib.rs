@@ -4,10 +4,11 @@ use serde::{Serialize, Deserialize};
 use vpn_core::{
     crypto::IdentityKey,
     client::VpnApiClient,
-    p2p::{PeerDiscovery, PeerInfo},
+    p2p::PeerDiscovery,
+    error::VpnError,
 };
 use tokio::sync::OnceCell;
-use vpn_core::tunnel::{VpnTunnel, WireGuardTunnel, ExternalTunnel, ConnectionConfig, Credentials};
+use vpn_core::tunnel::{VpnTunnel, GoTunnel, ConnectionConfig, Credentials};
 use std::net::SocketAddr;
 
 // Shared state to track VPN status across the app
@@ -56,6 +57,7 @@ impl Default for VpnStatus {
             bytes_up: 0,
             bytes_down: 0,
             connected_since: None,
+            p2p_stats: None,
         }
     }
 }
@@ -160,7 +162,7 @@ async fn connect_vpn(
     // 3. Establish Tunnel
     let server_addr: SocketAddr = info.server_endpoint.parse().map_err(|e| format!("Invalid endpoint: {}", e))?;
     let credentials = Credentials::Password { 
-        username: identity.public_key_hex(), 
+        username: Some(identity.public_key_hex()), 
         password: "p2p-session-key".to_string() 
     };
 
@@ -171,10 +173,7 @@ async fn connect_vpn(
         timeout: std::time::Duration::from_secs(10),
     };
 
-    let mut tunnel: Box<dyn VpnTunnel + Send> = match proto {
-        vpn_core::protocol::VpnProtocol::WireGuard | vpn_core::protocol::VpnProtocol::WireGuardObfuscated => Box::new(WireGuardTunnel::new()),
-        _ => Box::new(ExternalTunnel::new(proto)),
-    };
+    let mut tunnel: Box<dyn VpnTunnel + Send> = Box::new(GoTunnel::new(info.session_id.clone(), proto));
 
     match tunnel.connect(&config).await {
         Ok(handle) => {
@@ -193,9 +192,11 @@ async fn connect_vpn(
             Ok(status.clone())
         },
         Err(e) => {
+            let e: VpnError = e;
+            let err_msg = e.to_string();
             let mut status = state.vpn_status.lock().unwrap();
-            status.state = ConnectionState::Error(e.to_string());
-            Err(e.to_string())
+            status.state = ConnectionState::Error(err_msg.clone());
+            Err(err_msg)
         }
     }
 }
@@ -203,11 +204,13 @@ async fn connect_vpn(
 #[tauri::command]
 async fn disconnect_vpn(state: State<'_, AppState>) -> Result<VpnStatus, String> {
     // 1. Stop active tunnel
-    {
+    let tunnel = {
         let mut active = state.active_tunnel.lock().unwrap();
-        if let Some(mut tunnel) = active.take() {
-            let _ = tunnel.disconnect().await;
-        }
+        active.take()
+    };
+
+    if let Some(mut t) = tunnel {
+        let _ = t.disconnect().await;
     }
 
     // 2. Update status
@@ -244,7 +247,7 @@ async fn stop_sharing(state: State<'_, AppState>) -> Result<bool, String> {
 }
 
 #[tauri::command]
-async fn get_p2p_status(state: State<'_, AppState>) -> Result<P2pStats, String> {
+async fn get_p2p_status(_state: State<'_, AppState>) -> Result<P2pStats, String> {
     // In a real implementation, we would query the PeerDiscovery swarm
     // For now, returning mock data that reflects active movement
     Ok(P2pStats {

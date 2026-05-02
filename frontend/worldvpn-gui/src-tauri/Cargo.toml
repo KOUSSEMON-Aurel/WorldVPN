@@ -1,6 +1,6 @@
 [package]
 name = "worldvpn-gui"
-version = "0.1.0"
+version = "0.2.0"
 description = "WorldVPN Desktop Client"
 authors = ["WorldVPN Team"]
 edition = "2021"
