@@ -210,7 +210,7 @@ pub async fn submit_receipt(
     .execute(&mut *tx)
     .await;
 
-    if let Err(e) = q2 {
+    if let Err(_e) = q2 {
         let _ = tx.rollback().await;
         return (StatusCode::PAYMENT_REQUIRED, Json(json!({"error": "Consumer balance insufficient"}))).into_response();
     }

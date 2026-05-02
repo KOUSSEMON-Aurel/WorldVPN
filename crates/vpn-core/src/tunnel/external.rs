@@ -1,7 +1,7 @@
 use crate::error::Result;
 use crate::protocol::VpnProtocol;
 use crate::tunnel::{ConnectionConfig, TunnelHandle, TunnelStats, VpnTunnel, Credentials};
-use crate::binary_manager::{BinaryManager, get_binary_specs};
+use crate::binary_manager::BinaryManager;
 use async_trait::async_trait;
 use std::process::{Child, Command, Stdio};
 use std::time::{Duration, Instant};

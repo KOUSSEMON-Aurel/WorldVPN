@@ -112,7 +112,7 @@ impl VpnApiClient {
             return Err(VpnError::ConnectionFailed(format!("API Error: {}", response.status())));
         }
 
-        let mut info = response
+        let info = response
             .json::<ConnectionInfo>()
             .await
             .map_err(|e| VpnError::Internal(format!("Invalid response: {}", e)))?;
