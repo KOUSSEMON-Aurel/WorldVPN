@@ -6,6 +6,7 @@ package main
 import "C"
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -24,6 +25,7 @@ type ConnectResponse struct {
 	VirtualIP      string `json:"assigned_ip"`
 	PeerEndpoint   string `json:"peer_endpoint"`
 	PeerPublicKey  string `json:"peer_public_key"`
+	PrivateKey     string `json:"private_key"`
 	ServerEndpoint string `json:"server_endpoint"`
 	Password       string `json:"password"`
 	UUID           string `json:"uuid"`
@@ -32,38 +34,68 @@ type ConnectResponse struct {
 }
 
 var (
-	mu       sync.Mutex
 	instance *box.Box
+	lock     sync.Mutex
 )
 
 //export StartTunnel
 func StartTunnel(tunFd C.int, configJSON *C.char) C.int {
-	mu.Lock()
-	defer mu.Unlock()
+	lock.Lock()
+	defer lock.Unlock()
 
 	if instance != nil {
-		instance.Close()
-		instance = nil
+		log.Println("[vpn-go] Tunnel already running")
+		return 0
 	}
 
 	cfgStr := C.GoString(configJSON)
 	var cfg ConnectResponse
 	if err := json.Unmarshal([]byte(cfgStr), &cfg); err != nil {
-		log.Printf("[vpn-go] JSON error: %v", err)
+		log.Printf("[vpn-go] JSON unmarshal error: %v", err)
 		return -1
 	}
 
-	// Build JSON config
-	configMap := buildConfigMap(int(tunFd), cfg)
-	jsonBytes, _ := json.Marshal(configMap)
+	// 1. Build Minimal sing-box config (No auto_route, no complex registries)
+	host, port, _ := splitAddr(cfg.PeerEndpoint)
+	outbound := map[string]interface{}{
+		"type":          "wireguard",
+		"tag":           "proxy",
+		"server":        host,
+		"server_port":   port,
+		"local_address": []string{cfg.VirtualIP + "/32"},
+		"private_key":   cfg.PrivateKey,
+		"public_key":    cfg.PeerPublicKey,
+		"mtu":           cfg.MTU,
+	}
+
+	tunInbound := map[string]interface{}{
+		"type":          "tun",
+		"tag":           "tun-in",
+		"mtu":           cfg.MTU,
+		"inet4_address": []string{cfg.VirtualIP + "/32"},
+		"stack":         "gvisor",
+		"auto_route":    false, // TEST: Disable auto_route to avoid platform registry
+	}
+
+	configMap := map[string]interface{}{
+		"log": map[string]interface{}{
+			"level": "trace",
+		},
+		"inbounds":  []interface{}{tunInbound},
+		"outbounds": []interface{}{outbound},
+	}
+
+	fullCfgBytes, _ := json.Marshal(configMap)
 
 	var opts option.Options
-	if err := json.Unmarshal(jsonBytes, &opts); err != nil {
-		log.Printf("[vpn-go] Config unmarshal error: %v", err)
+	if err := json.Unmarshal(fullCfgBytes, &opts); err != nil {
+		log.Printf("[vpn-go] Config parse error: %v", err)
 		return -1
 	}
 
+	// 2. Initialize Box
 	b, err := box.New(box.Options{
+		Context: context.Background(),
 		Options: opts,
 	})
 	if err != nil {
@@ -78,14 +110,15 @@ func StartTunnel(tunFd C.int, configJSON *C.char) C.int {
 	}
 
 	instance = b
-	log.Printf("[vpn-go] Tunnel started: protocol=%s", cfg.Protocol)
+	log.Printf("[vpn-go] Tunnel started minimal")
 	return 0
 }
 
 //export StopTunnel
 func StopTunnel() {
-	mu.Lock()
-	defer mu.Unlock()
+	lock.Lock()
+	defer lock.Unlock()
+
 	if instance != nil {
 		instance.Close()
 		instance = nil
@@ -126,6 +159,7 @@ func buildConfigMap(tunFd int, cfg ConnectResponse) map[string]interface{} {
 			"server":        host,
 			"server_port":   port,
 			"local_address": []string{cfg.VirtualIP + "/32"},
+			"private_key":   cfg.PrivateKey,
 			"public_key":    cfg.PeerPublicKey,
 			"mtu":           cfg.MTU,
 		}
@@ -164,9 +198,43 @@ func buildConfigMap(tunFd int, cfg ConnectResponse) map[string]interface{} {
 		}
 	}
 
+	// Build DNS
+	dnsConfig := map[string]interface{}{
+		"servers": []interface{}{
+			map[string]interface{}{
+				"address": "1.1.1.1",
+				"tag":     "cloudflare",
+			},
+		},
+		"strategy": "prefer_ipv4",
+	}
+
+	// Build Route
+	routeConfig := map[string]interface{}{
+		"auto_route": true,
+		"rules": []interface{}{
+			map[string]interface{}{
+				"protocol": "dns",
+				"outbound": "dns-out",
+			},
+			map[string]interface{}{
+				"inbound":  []string{"tun-in"},
+				"outbound": "proxy",
+			},
+		},
+	}
+
+	// Add DNS Outbound
+	dnsOutbound := map[string]interface{}{
+		"type": "dns",
+		"tag":  "dns-out",
+	}
+
 	return map[string]interface{}{
 		"inbounds":  []interface{}{tunInbound},
-		"outbounds": []interface{}{outbound},
+		"outbounds": []interface{}{outbound, dnsOutbound},
+		"dns":       dnsConfig,
+		"route":     routeConfig,
 	}
 }
 

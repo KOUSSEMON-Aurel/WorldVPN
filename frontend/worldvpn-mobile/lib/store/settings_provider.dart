@@ -1,4 +1,5 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 class SettingsState {
   final String protocol;
@@ -33,15 +34,53 @@ class SettingsState {
 }
 
 class SettingsNotifier extends StateNotifier<SettingsState> {
-  SettingsNotifier() : super(SettingsState());
+  SettingsNotifier() : super(SettingsState()) {
+    _load();
+  }
 
-  void setProtocol(String protocol) => state = state.copyWith(protocol: protocol);
-  void toggleKillSwitch(bool value) => state = state.copyWith(killSwitch: value);
-  void toggleSplitTunneling(bool value) => state = state.copyWith(splitTunneling: value);
-  void toggleSharingMode(bool value) => state = state.copyWith(sharingMode: value);
-  void setLanguage(String lang) => state = state.copyWith(language: lang);
+  Future<void> _load() async {
+    final prefs = await SharedPreferences.getInstance();
+    state = SettingsState(
+      protocol: prefs.getString('settings_protocol') ?? "WireGuard",
+      killSwitch: prefs.getBool('settings_killSwitch') ?? true,
+      splitTunneling: prefs.getBool('settings_splitTunneling') ?? false,
+      sharingMode: prefs.getBool('settings_sharingMode') ?? false,
+      language: prefs.getString('settings_language') ?? "English (US)",
+    );
+  }
+
+  void setProtocol(String protocol) {
+    state = state.copyWith(protocol: protocol);
+    SharedPreferences.getInstance()
+        .then((p) => p.setString('settings_protocol', protocol));
+  }
+
+  void toggleKillSwitch(bool value) {
+    state = state.copyWith(killSwitch: value);
+    SharedPreferences.getInstance()
+        .then((p) => p.setBool('settings_killSwitch', value));
+  }
+
+  void toggleSplitTunneling(bool value) {
+    state = state.copyWith(splitTunneling: value);
+    SharedPreferences.getInstance()
+        .then((p) => p.setBool('settings_splitTunneling', value));
+  }
+
+  void toggleSharingMode(bool value) {
+    state = state.copyWith(sharingMode: value);
+    SharedPreferences.getInstance()
+        .then((p) => p.setBool('settings_sharingMode', value));
+  }
+
+  void setLanguage(String lang) {
+    state = state.copyWith(language: lang);
+    SharedPreferences.getInstance()
+        .then((p) => p.setString('settings_language', lang));
+  }
 }
 
-final settingsProvider = StateNotifierProvider<SettingsNotifier, SettingsState>((ref) {
+final settingsProvider =
+    StateNotifierProvider<SettingsNotifier, SettingsState>((ref) {
   return SettingsNotifier();
 });

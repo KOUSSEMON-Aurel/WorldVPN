@@ -17,11 +17,13 @@ void main() async {
     debugPrint("✅ Rust Library initialized");
 
     // Configurer l'URL du backend de production
-    await rust.setBackendUrl(url: "https://worldvpn-backend.onrender.com");
-    debugPrint("🌐 Backend URL set to production");
+    const backendUrl = String.fromEnvironment('WORLDVPN_API_URL',
+        defaultValue: 'https://worldvpn-backend.onrender.com');
+    await rust.setBackendUrl(url: backendUrl);
+    debugPrint("🌐 Backend URL set to $backendUrl");
 
-    // Auto-login silencieux: génère ou restaure l'identité
-    _silentLogin();
+    // Auto-login silencieux: génère ou restaure l'identité (bloquant)
+    await _silentLogin();
   } catch (e, stack) {
     debugPrint("❌ CRITICAL: Rust Initialization failed: $e");
     debugPrint(stack.toString());

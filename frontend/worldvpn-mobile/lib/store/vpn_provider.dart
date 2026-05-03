@@ -45,26 +45,27 @@ class VpnController {
 
     try {
       // ── 1. Matchmaking backend via Rust (inchangé) ──────────────────
-      // startVpnMatchmaking retourne le ConnectResponse JSON brut
       final connectJson = await rust.startVpnMatchmaking(
         protocolStr: settings.protocol,
-        countryCode: "FR",
+        countryCode: nodeGroup == "COMMUNITY" ? "FR" : "US",
         nodeGroup: nodeGroup,
       );
 
       // ── 2. Demander la permission VPN Android (popup unique) ─────────
       final bool granted = await _vpnChannel.invokeMethod('prepare');
       if (!granted) {
-        ref.read(vpnStatusProvider.notifier).state = "Disconnected";
         return;
       }
 
       // ── 3. Démarrer le tunnel Go via Kotlin ─────────────────────────
       await _vpnChannel.invokeMethod('start', {
         'connect_response': connectJson,
+        'kill_switch': settings.killSwitch,
+        'split_tunneling': settings.splitTunneling,
       });
-
-      ref.read(vpnStatusProvider.notifier).state = "Connected";
+    } on MissingPluginException {
+      ref.read(vpnStatusProvider.notifier).state =
+          "Error: Native VPN service missing or not registered";
     } on PlatformException catch (e) {
       ref.read(vpnStatusProvider.notifier).state = "Error: ${e.message}";
     } catch (e) {

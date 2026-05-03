@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { Shield, Globe, Wallet, Settings, Power, Activity, Lock, Users, Radio, LogOut, Zap } from "lucide-react";
 import { motion, AnimatePresence } from "framer-motion";
 import { invoke } from "@tauri-apps/api/core";
@@ -35,12 +35,6 @@ const COUNTRY_COORDS: Record<string, { top: string; left: string }> = {
 };
 
 // Mock Data
-const MOCK_SESSIONS = [
-  { id: 1, country: "DE", type: "browsing", bytes: "15.4 MB", earning: "+0.15 CR" },
-  { id: 2, country: "IR", type: "censorship-bypass", bytes: "42.1 MB", earning: "+0.80 CR" },
-  { id: 3, country: "US", type: "streaming", bytes: "128.0 MB", earning: "+1.20 CR" },
-];
-
 interface User {
   username: string;
   credits: number;
@@ -57,7 +51,10 @@ function App() {
   const [nodeGroup, setNodeGroup] = useState<NodeGroup>("COMMUNITY");
   const [traffic, setTraffic] = useState({ down: 0, up: 0 });
   const [p2pStats, setP2pStats] = useState({ connected_peers: 0, known_nodes: 0, total_sent: 0, total_received: 0 });
-  const [showKey, setShowKey] = useState(false);
+  const [showImportDialog, setShowImportDialog] = useState(false);
+  const [importKeyVal, setImportKeyVal] = useState("");
+  const [importError, setImportError] = useState("");
+  const [initError, setInitError] = useState<string | null>(null);
 
   // Poll P2P Stats
   useEffect(() => {
@@ -73,67 +70,174 @@ function App() {
     return () => clearInterval(interval);
   }, [isSharing]);
 
-  // Auto-login or Register if no key
+  // Load basic settings
   useEffect(() => {
+    const savedGroup = localStorage.getItem("worldvpn_nodeGroup");
+    if (savedGroup === "COMMUNITY" || savedGroup === "PUBLIC") setNodeGroup(savedGroup as NodeGroup);
+
+    const savedSharing = localStorage.getItem("worldvpn_isSharing");
+    if (savedSharing !== null) setIsSharing(savedSharing === "true");
+  }, []);
+
+  // Save basic settings
+  useEffect(() => {
+    localStorage.setItem("worldvpn_nodeGroup", nodeGroup);
+  }, [nodeGroup]);
+
+  useEffect(() => {
+    localStorage.setItem("worldvpn_isSharing", isSharing.toString());
+  }, [isSharing]);
+
+  // Auto-login or Register if no key
+  const initRun = useRef(false);
+  useEffect(() => {
+    if (initRun.current) return;
+    initRun.current = true;
+
     const initIdentity = async () => {
-      const savedKey = localStorage.getItem("worldvpn_private_key");
-      if (savedKey) {
-        try {
-          const keyArray = JSON.parse(savedKey);
-          await loginWithKey(keyArray);
-        } catch (e) {
-          console.error("Failed to auto-login", e);
+      console.debug("initIdentity started");
+      setInitError(null);
+      try {
+        const isSaved: boolean = await invoke("is_identity_saved");
+        console.debug("Saved key found:", isSaved);
+        if (isSaved) {
+          const success = await login();
+          if (!success) {
+            console.warn("Auto-login failed with saved key, attempting to register fresh identity...");
+            await handleRegister();
+          }
+        } else {
           await handleRegister();
         }
-      } else {
-        await handleRegister();
+      } catch (e: any) {
+        console.error("Initialization failed", e);
+        const errorMsg = typeof e === 'string' ? e : (e.message || JSON.stringify(e));
+        setInitError(`Initialization failed: ${errorMsg}`);
       }
     };
     initIdentity();
   }, []);
 
-  // Simulate real-time traffic when connected
+  const [actualIp, setActualIp] = useState("192.168.1.42");
+  const [latency, setLatency] = useState<number | null>(null);
+  const [sessions, setSessions] = useState<any[]>([]);
+
+  // Fetch sessions from backend
+  useEffect(() => {
+    const fetchSessions = async () => {
+      try {
+        const backendSessions: any = await invoke("get_sessions");
+        setSessions(backendSessions);
+      } catch (e) {
+        console.error("Failed to fetch sessions", e);
+      }
+    };
+    fetchSessions();
+  }, []);
+
+  // Poll VPN Metrics & Status
   useEffect(() => {
     if (status !== 'connected') {
       setTraffic({ down: 0, up: 0 });
+      setActualIp("192.168.1.42");
+      setLatency(null);
       return;
     }
-    const interval = setInterval(() => {
-      setTraffic({
-        down: Math.random() * 25 + 5, // 5-30 Mbps
-        up: Math.random() * 5 + 1      // 1-6 Mbps
-      });
+    const interval = setInterval(async () => {
+      try {
+        const metrics: any = await invoke("get_vpn_metrics");
+        setTraffic({ down: metrics.down_mbps, up: metrics.up_mbps });
+        setLatency(metrics.latency_ms);
+
+        const vpnStatus: any = await invoke("get_vpn_status");
+        if (vpnStatus.state === "Connected" && vpnStatus.current_ip) {
+          setActualIp(vpnStatus.current_ip);
+        }
+      } catch (e) {
+        console.error("Metrics polling failed", e);
+      }
     }, 2000);
     return () => clearInterval(interval);
   }, [status]);
 
-  const loginWithKey = async (keyArray: number[]) => {
+  const login = async (): Promise<boolean> => {
     try {
-      const response: any = await invoke("login_anonymously_desktop", { privateKey: keyArray });
+      console.debug("Invoking login_anonymously_desktop");
+      const response: any = await invoke("login_anonymously_desktop");
+      console.debug("Login response received:", response);
       setUser({
         username: response.username,
-        credits: 50,
+        credits: 0,
         token: response.token,
         publicKey: response.username,
       });
-      localStorage.setItem("worldvpn_private_key", JSON.stringify(keyArray));
+      return true;
     } catch (e: any) {
-      console.error("Login failed", e);
+      console.error("Login failed inner context:", e);
+      return false;
     }
   };
 
+  // Poll Wallet Balance
+  useEffect(() => {
+    const updateBalance = async () => {
+      if (!user?.token) return;
+      try {
+        const balance: any = await invoke("get_wallet_balance_desktop", { token: user.token });
+        setUser(prev => prev ? { ...prev, credits: balance } : null);
+      } catch (e) {
+        console.error("Failed to fetch balance", e);
+      }
+    };
+    updateBalance();
+    const int = setInterval(updateBalance, 10000);
+    return () => clearInterval(int);
+  }, [user?.token, activeTab]);
+
   const handleRegister = async () => {
     try {
+      console.debug("Invoking generate_identity...");
       const identity: any = await invoke("generate_identity");
-      await loginWithKey(identity.private_key);
+      console.debug("New identity generated", identity);
+      const success = await login();
+      if (!success) {
+        throw new Error("Automatic login failed after registration.");
+      }
     } catch (e: any) {
       console.error("Failed to generate identity", e);
+      throw e;
     }
   };
 
   const handleLogout = () => {
     setUser(null);
-    localStorage.removeItem("worldvpn_private_key");
+  };
+
+  const handleImportKeySubmit = async () => {
+    try {
+      const arr = JSON.parse(importKeyVal);
+      if (!Array.isArray(arr) || arr.length === 0) {
+        setImportError("Invalid format: Must be a JSON array of numbers");
+        return;
+      }
+      if (arr.some(n => typeof n !== 'number' || n < 0 || n > 255)) {
+        setImportError("Invalid format: Array elements must be valid byte values (0-255)");
+        return;
+      }
+
+      const response: any = await invoke("import_identity", { privateKey: arr });
+      setUser({
+        username: response.username,
+        credits: 0,
+        token: response.token,
+        publicKey: response.username,
+      });
+      setShowImportDialog(false);
+      setImportKeyVal("");
+      setImportError("");
+    } catch (e: any) {
+      setImportError(`Failed to import key: ${e.message || e}`);
+    }
   };
 
   // Fetch nodes from backend
@@ -141,18 +245,10 @@ function App() {
     const fetchNodes = async () => {
       try {
         if (activeTab === 'map') {
-          // In a real app we'd use invoke("discover_nodes")
-          const mockNodes: Node[] = nodeGroup === 'PUBLIC'
-            ? [
-              { id: '1', country_code: 'JP', bandwidth_mbps: 100, latency_ms: 120, group: 'PUBLIC' },
-              { id: '2', country_code: 'US', bandwidth_mbps: 80, latency_ms: 45, group: 'PUBLIC' },
-              { id: '3', country_code: 'DE', bandwidth_mbps: 50, latency_ms: 15, group: 'PUBLIC' },
-            ]
-            : [
-              { id: '4', country_code: 'FR', bandwidth_mbps: 20, latency_ms: 10, group: 'COMMUNITY' },
-              { id: '5', country_code: 'IN', bandwidth_mbps: 15, latency_ms: 65, group: 'COMMUNITY' },
-            ];
-          setNodes(mockNodes);
+          const backendNodes: any = await invoke("get_nodes", { group: nodeGroup });
+          if (Array.isArray(backendNodes)) {
+            setNodes(backendNodes);
+          }
         }
       } catch (e) {
         console.error("Failed to fetch nodes", e);
@@ -163,11 +259,27 @@ function App() {
     return () => clearInterval(interval);
   }, [activeTab, nodeGroup]);
 
-  const toggleConnection = () => {
+  const toggleConnection = async () => {
     if (status === "disconnected") {
       setStatus("connecting");
-      setTimeout(() => setStatus("connected"), 2000);
+      try {
+        await invoke("connect_vpn", {
+          protocol: "WireGuard",
+          country: nodeGroup === "COMMUNITY" ? "FR" : "US",
+          token: user?.token || ""
+        });
+        setStatus("connected");
+      } catch (e: any) {
+        console.error("Connection failed", e);
+        setStatus("disconnected");
+        alert("Failed to connect: " + (e.message || e));
+      }
     } else {
+      try {
+        await invoke("disconnect_vpn");
+      } catch (e: any) {
+        console.error("Disconnect failed", e);
+      }
       setStatus("disconnected");
     }
   };
@@ -175,10 +287,33 @@ function App() {
   if (!user) {
     return (
       <div className="flex h-screen w-screen bg-background items-center justify-center p-6">
-        <div className="flex flex-col items-center gap-4">
-          <Shield className="w-12 h-12 text-primary animate-pulse" />
-          <h1 className="text-xl font-bold text-white">Initializing WorldVPN...</h1>
-          <p className="text-text-muted text-sm">Synchronizing Secure Identity</p>
+        <div className="flex flex-col items-center gap-4 max-w-sm text-center">
+          <Shield className={`w-12 h-12 ${initError ? 'text-danger' : 'text-primary animate-pulse'}`} />
+          <h1 className="text-xl font-bold text-white">
+            {initError ? "Initialization Failed" : "Initializing WorldVPN..."}
+          </h1>
+          <p className="text-text-muted text-sm px-4">
+            {initError || "Synchronizing Secure Identity"}
+          </p>
+
+          {initError && (
+            <div className="flex gap-3 mt-4">
+              <button
+                onClick={() => window.location.reload()}
+                className="px-4 py-2 bg-surface-highlight hover:bg-white/10 rounded-lg text-xs font-bold transition-all"
+              >
+                RETRY
+              </button>
+              <button
+                onClick={() => {
+                  window.location.reload();
+                }}
+                className="px-4 py-2 border border-danger/30 text-danger hover:bg-danger/10 rounded-lg text-xs font-bold transition-all"
+              >
+                RESET IDENTITY
+              </button>
+            </div>
+          )}
         </div>
       </div>
     );
@@ -229,7 +364,7 @@ function App() {
                 {status === 'connected' ? 'Secure' : 'Unprotected'}
               </span>
             </div>
-            <p className="text-xs text-text-muted font-mono mt-1 opacity-70">IP: {status === 'connected' ? '10.8.42.19 (Protected)' : '192.168.1.42 (Exposed)'}</p>
+            <p className="text-xs text-text-muted font-mono mt-1 opacity-70">IP: {status === 'connected' ? `${actualIp} (Protected)` : '192.168.1.42 (Exposed)'}</p>
           </div>
 
           <div className="flex items-center gap-4">
@@ -269,7 +404,7 @@ function App() {
                         whileTap={{ scale: 0.95 }}
                         onClick={toggleConnection}
                         className={`relative w-40 h-40 rounded-full flex flex-col items-center justify-center transition-all duration-500 shadow-2xl
-                          ${status === "connected"
+                            ${status === "connected"
                             ? "bg-gradient-to-br from-primary/20 to-primary/5 border-2 border-primary shadow-[0_0_60px_rgba(0,242,234,0.2)]"
                             : status === "connecting"
                               ? "bg-surface-highlight border-2 border-white/20 animate-pulse"
@@ -287,7 +422,7 @@ function App() {
                           {status === "connected" && (
                             <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -10 }} className="flex flex-col items-center">
                               <span className="text-secondary font-bold text-lg flex items-center gap-2">
-                                <Shield className="w-4 h-4" /> Tokyo, Japan
+                                <Shield className="w-4 h-4" /> {nodeGroup === "COMMUNITY" ? "Paris, France" : "Global Public Node"}
                               </span>
                             </motion.div>
                           )}
@@ -297,9 +432,9 @@ function App() {
                   </div>
 
                   <div className="grid grid-cols-3 gap-4 h-32">
-                    <StatCard icon={Activity} label="Latency" value={status === 'connected' ? "15 ms" : "--"} sub="Optimized" color="text-success" />
-                    <StatCard icon={Zap} label="Download" value={status === 'connected' ? `${traffic.down.toFixed(1)} Mbps` : "--"} sub="Global Route" color="text-primary" />
-                    <StatCard icon={Zap} label="Upload" value={status === 'connected' ? `${traffic.up.toFixed(1)} Mbps` : "--"} sub="Secure Tunnel" color="text-secondary" />
+                    <StatCard icon={Activity} label="Latency" value={status === 'connected' ? (latency ? `${latency} ms` : "--") : "--"} sub="Optimized" color="text-success" />
+                    <StatCard icon={Zap} label="Download" value={status === 'connected' ? `${traffic.down?.toFixed(1) || 0} Mbps` : "--"} sub="Global Route" color="text-primary" />
+                    <StatCard icon={Zap} label="Upload" value={status === 'connected' ? `${traffic.up?.toFixed(1) || 0} Mbps` : "--"} sub="Secure Tunnel" color="text-secondary" />
                   </div>
                 </div>
 
@@ -331,7 +466,7 @@ function App() {
                           </div>
                         </div>
 
-                        {MOCK_SESSIONS.map((session, i) => (
+                        {sessions.map((session: any, i: number) => (
                           <motion.div key={session.id} initial={{ opacity: 0, x: 20 }} animate={{ opacity: 1, x: 0 }} transition={{ delay: i * 0.1 }} className="bg-surface-highlight/50 rounded-xl p-3 border border-white/5 flex items-center justify-between">
                             <div className="flex items-center gap-3">
                               <div className="w-10 h-10 rounded-lg bg-surface flex items-center justify-center font-bold text-sm border border-white/5">{session.country}</div>
@@ -413,33 +548,17 @@ function App() {
                         <label className="text-[10px] font-bold text-text-muted uppercase mb-2 block">Secure Identity Key</label>
                         <div className="flex gap-2">
                           <input
-                            type={showKey ? "text" : "password"}
+                            type="text"
                             readOnly
-                            value={localStorage.getItem("worldvpn_private_key") || ""}
-                            className="flex-1 bg-white/5 border border-white/10 rounded-lg px-3 py-2 text-xs font-mono text-white outline-none"
+                            value={"[SECURE STORAGE IN RUST] - " + (user.publicKey || "")}
+                            className="flex-1 bg-white/5 border border-white/10 rounded-lg px-3 py-2 text-xs font-mono text-white outline-none opacity-50"
                           />
-                          <button
-                            onClick={() => setShowKey(!showKey)}
-                            className="bg-white/10 hover:bg-white/20 px-3 rounded-lg text-[10px] font-bold transition-colors"
-                          >
-                            {showKey ? "HIDE" : "SHOW"}
-                          </button>
                         </div>
                       </div>
 
                       <div className="pt-4 border-t border-white/5 flex flex-wrap gap-3">
                         <button
-                          onClick={() => {
-                            const val = prompt("Paste your Identity Key (JSON array of bytes):");
-                            if (val) {
-                              try {
-                                const key = JSON.parse(val);
-                                loginWithKey(key);
-                              } catch (e) {
-                                alert("Invalid key format");
-                              }
-                            }
-                          }}
+                          onClick={() => setShowImportDialog(true)}
                           className="text-primary text-xs font-bold hover:underline"
                         >
                           Restore Identity
@@ -466,10 +585,9 @@ function App() {
 
                   <div className="bg-surface/30 border border-white/10 rounded-3xl p-6">
                     <h3 className="text-sm font-bold text-white mb-4">About WorldVPN</h3>
-                    <div className="space-y-2 text-xs text-text-muted">
-                      <p>Version: 0.1.0-alpha</p>
-                      <p>Protocol: Unified sing-box (Go)</p>
-                      <p>Identity: Ed25519 Elliptic Curve</p>
+                    <div className="mt-8 text-[10px] text-text-muted font-mono space-y-1">
+                      <p className="flex items-center gap-2"><span>•</span> Version: 1.0.0-beta.1 | Protocol: Unified sing-box (Go) | Identity: Ed25519 Elliptic Curve</p>
+                      <p className="flex items-center gap-2 text-primary/50"><span>•</span> Status: Initialized • {user ? "Authenticated" : "Anonymous"}</p>
                     </div>
                   </div>
                 </div>
@@ -478,16 +596,48 @@ function App() {
           </AnimatePresence>
         </div>
       </main>
+
+      {/* Import Import Modal */}
+      <AnimatePresence>
+        {showImportDialog && (
+          <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="absolute inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm">
+            <div className="bg-surface border border-white/10 p-6 rounded-2xl w-[400px]">
+              <h3 className="text-lg font-bold text-white mb-4">Import Identity</h3>
+              <p className="text-xs text-text-muted mb-4">Paste your identity key (JSON array of bytes) below.</p>
+              <textarea
+                className="w-full h-32 bg-white/5 border border-white/10 rounded-lg p-3 text-xs font-mono text-white outline-none focus:border-primary/50 transition-colors resize-none mb-2"
+                value={importKeyVal}
+                onChange={(e) => setImportKeyVal(e.target.value)}
+                placeholder="[123, 45, ...]"
+              />
+              {importError && <p className="text-danger text-xs mb-4 font-bold">{importError}</p>}
+              <div className="flex gap-3 justify-end items-center mt-2">
+                <button
+                  onClick={() => { setShowImportDialog(false); setImportError(""); }}
+                  className="px-4 py-2 hover:bg-white/5 rounded-lg text-xs font-bold transition-all text-text-muted"
+                >
+                  CANCEL
+                </button>
+                <button
+                  onClick={handleImportKeySubmit}
+                  className="px-4 py-2 bg-primary text-black rounded-lg text-xs font-bold transition-all hover:scale-105"
+                >
+                  IMPORT
+                </button>
+              </div>
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
     </div>
   );
 }
 
-function NavIcon({ icon: Icon, active, onClick }: any) {
+function NavIcon({ icon: Icon, active, onClick, label }: { icon: any, active?: boolean, onClick?: () => void, label?: string }) {
   return (
-    <div className="relative group cursor-pointer w-12 h-12 flex items-center justify-center" onClick={onClick}>
-      {active && <motion.div layoutId="activeNav" className="absolute inset-0 bg-primary/10 rounded-xl border border-primary/30" />}
-      <Icon className={`w-6 h-6 z-10 ${active ? 'text-primary' : 'text-text-muted'}`} />
-    </div>
+    <motion.button title={label} whileHover={{ scale: 1.1 }} whileTap={{ scale: 0.9 }} onClick={onClick} className={`p-3 rounded-xl transition-all duration-300 relative group ${active ? 'bg-primary/20 text-primary' : 'text-text-muted hover:bg-surface-highlight hover:text-white'}`}>
+      <Icon className="w-5 h-5" />
+    </motion.button>
   );
 }
 

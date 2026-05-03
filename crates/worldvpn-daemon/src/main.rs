@@ -9,7 +9,7 @@ use tracing_subscriber::EnvFilter;
 use vpn_core::{
     crypto::IdentityKey,
     client::VpnApiClient,
-    p2p::{PeerDiscovery, PeerInfo},
+    p2p::PeerDiscovery,
 };
 
 /// WorldVPN Daemon - Background P2P Networking & Sharing Service
