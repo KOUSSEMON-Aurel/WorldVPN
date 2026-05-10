@@ -113,12 +113,27 @@ export function LeafletMap({ nodes, onConnect, nodeGroup }: any) {
 
       const marker = L.marker([lat, lon], { icon }).addTo(map);
 
+      // Calculate protocol breakdown
+      const protocolCounts: Record<string, number> = {};
+      countryNodes.forEach(n => {
+        const p = n.protocol || "Unknown";
+        protocolCounts[p] = (protocolCounts[p] || 0) + 1;
+      });
+      const protocolBadges = Object.entries(protocolCounts).map(([proto, count]) =>
+        `<span class="text-[8px] px-1 py-0.5 mt-1 rounded text-white/70" style="border: 1px solid white; display: inline-block;">${count}x ${proto}</span>`
+      ).join(' ');
+
       const popupHtml = document.createElement("div");
       popupHtml.className = "flex flex-col min-w-[250px]";
       popupHtml.innerHTML = `
-        <div class="flex justify-between items-center mb-3">
-          <span class="text-white font-black text-xs tracking-wider">${cc} PEERS</span>
-          <span class="text-[8px] px-2 py-0.5 rounded-full font-bold uppercase" style="background: ${baseColor}20; color: ${baseColor}; border: 1px solid ${baseColor}20;">
+        <div class="flex justify-between items-start mb-3 border-b border-white/10 pb-2">
+          <div class="flex flex-col">
+             <span class="text-white font-black text-sm tracking-wider flex items-center gap-2">${cc} <span class="text-xs text-text-muted">(${count} servers)</span></span>
+             <div class="flex gap-1 flex-wrap mt-1">
+                ${protocolBadges}
+             </div>
+          </div>
+          <span class="text-[8px] px-2 py-0.5 rounded-full font-bold uppercase mt-1" style="background: ${baseColor}20; color: ${baseColor}; border: 1px solid ${baseColor}20;">
             ${nodeGroup}
           </span>
         </div>
