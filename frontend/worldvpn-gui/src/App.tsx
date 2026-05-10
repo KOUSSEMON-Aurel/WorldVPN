@@ -2,6 +2,7 @@ import { useState, useEffect, useRef } from "react";
 import { Shield, Globe, Wallet, Settings, Power, Activity, Lock, Users, Radio, LogOut, Zap } from "lucide-react";
 import { motion, AnimatePresence } from "framer-motion";
 import { invoke } from "@tauri-apps/api/core";
+import { TransformWrapper, TransformComponent } from "react-zoom-pan-pinch";
 import "./App.css";
 
 // Types
@@ -15,6 +16,8 @@ interface Node {
   bandwidth_mbps: number;
   latency_ms: number;
   group: string;
+  provider?: string;
+  protocol?: string;
 }
 
 // Country coordinates mapping (approximate for the SVG map)
@@ -32,6 +35,10 @@ const COUNTRY_COORDS: Record<string, { top: string; left: string }> = {
   "KR": { top: "33%", left: "84%" },
   "NL": { top: "26%", left: "49%" },
   "RU": { top: "22%", left: "65%" },
+  "TH": { top: "48%", left: "78%" },
+  "VN": { top: "47%", left: "80%" },
+  "PL": { top: "27%", left: "53%" },
+  "HK": { top: "42%", left: "81%" },
 };
 
 // Mock Data
@@ -118,7 +125,8 @@ function App() {
     initIdentity();
   }, []);
 
-  const [actualIp, setActualIp] = useState("192.168.1.42");
+  const [actualIp, setActualIp] = useState("Checking...");
+  const [connectedCountry, setConnectedCountry] = useState<string | null>(null);
   const [latency, setLatency] = useState<number | null>(null);
   const [sessions, setSessions] = useState<any[]>([]);
 
@@ -150,8 +158,11 @@ function App() {
         setLatency(metrics.latency_ms);
 
         const vpnStatus: any = await invoke("get_vpn_status");
-        if (vpnStatus.state === "Connected" && vpnStatus.current_ip) {
-          setActualIp(vpnStatus.current_ip);
+        if (vpnStatus.state === "Connected") {
+          if (vpnStatus.current_ip) setActualIp(vpnStatus.current_ip);
+          if (vpnStatus.country) setConnectedCountry(vpnStatus.country);
+        } else {
+          setConnectedCountry(null);
         }
       } catch (e) {
         console.error("Metrics polling failed", e);
@@ -258,7 +269,6 @@ function App() {
     const interval = setInterval(fetchNodes, 10000);
     return () => clearInterval(interval);
   }, [activeTab, nodeGroup]);
-
   const toggleConnection = async () => {
     if (status === "disconnected") {
       setStatus("connecting");
@@ -281,6 +291,33 @@ function App() {
         console.error("Disconnect failed", e);
       }
       setStatus("disconnected");
+    }
+  };
+
+  const connectToNode = async (node: Node) => {
+    setActiveTab("home");
+    setNodeGroup(node.group as NodeGroup);
+
+    if (status === "connected") {
+      try {
+        await invoke("disconnect_vpn");
+      } catch (e) {
+        console.warn("Disconnect failed or already disconnected", e);
+      }
+    }
+
+    setStatus("connecting");
+    try {
+      await invoke("connect_vpn", {
+        protocol: "WireGuard",
+        country: node.country_code,
+        token: user?.token || ""
+      });
+      setStatus("connected");
+    } catch (e: any) {
+      console.error("Connection failed", e);
+      setStatus("disconnected");
+      alert("Failed to connect: " + (e.message || e));
     }
   };
 
@@ -364,7 +401,7 @@ function App() {
                 {status === 'connected' ? 'Secure' : 'Unprotected'}
               </span>
             </div>
-            <p className="text-xs text-text-muted font-mono mt-1 opacity-70">IP: {status === 'connected' ? `${actualIp} (Protected)` : '192.168.1.42 (Exposed)'}</p>
+            <p className="text-xs text-text-muted font-mono mt-1 opacity-70">IP: {status === 'connected' ? `${actualIp} (Protected)` : 'Detecting... (Exposed)'}</p>
           </div>
 
           <div className="flex items-center gap-4">
@@ -422,7 +459,7 @@ function App() {
                           {status === "connected" && (
                             <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -10 }} className="flex flex-col items-center">
                               <span className="text-secondary font-bold text-lg flex items-center gap-2">
-                                <Shield className="w-4 h-4" /> {nodeGroup === "COMMUNITY" ? "Paris, France" : "Global Public Node"}
+                                <Shield className="w-4 h-4" /> {connectedCountry || "Secure Tunnel"}
                               </span>
                             </motion.div>
                           )}
@@ -505,11 +542,21 @@ function App() {
                   </div>
                 </div>
                 <div className="flex-1 bg-surface/30 border border-white/5 rounded-3xl relative overflow-hidden flex items-center justify-center">
-                  <img src="https://upload.wikimedia.org/wikipedia/commons/e/ec/World_map_blank_without_borders.svg" className="w-full max-w-4xl opacity-40 invert grayscale" />
-                  {nodes.map((node) => {
-                    const coords = COUNTRY_COORDS[node.country_code] || { top: "50%", left: "50%" };
-                    return <MapNode key={node.id} top={coords.top} left={coords.left} label={`${node.country_code} Server`} latency={`${node.latency_ms}ms`} active={nodeGroup === 'COMMUNITY'} />;
-                  })}
+                  <TransformWrapper initialScale={1.2} minScale={0.5} maxScale={8} centerOnInit={true} wheel={{ step: 0.1 }}>
+                    <TransformComponent wrapperClass="!w-full !h-full" contentClass="!w-full !h-full relative flex items-center justify-center">
+                      <img src="https://upload.wikimedia.org/wikipedia/commons/e/ec/World_map_blank_without_borders.svg" className="w-[1000px] max-w-none opacity-40 invert grayscale pointer-events-none" />
+                      {nodes.map((node, idx) => {
+                        const base = COUNTRY_COORDS[node.country_code] || { top: "50%", left: "50%" };
+                        // Jitter to prevent nodes from perfectly overlapping
+                        const jTop = Math.sin(idx * 12.9898) * 3;
+                        const jLeft = Math.cos(idx * 78.233) * 3;
+                        const top = `${parseFloat(base.top) + jTop}%`;
+                        const left = `${parseFloat(base.left) + jLeft}%`;
+
+                        return <MapNode key={node.id} top={top} left={left} node={node} onClick={connectToNode} active={nodeGroup === 'COMMUNITY'} />;
+                      })}
+                    </TransformComponent>
+                  </TransformWrapper>
                 </div>
               </motion.div>
             )}
@@ -656,10 +703,83 @@ function StatCard({ icon: Icon, label, value, sub, color }: any) {
   );
 }
 
-function MapNode({ top, left, label, latency, active }: any) {
+function MapNode({ top, left, node, onClick, active }: any) {
+  const [isHovered, setIsHovered] = useState(false);
+
   return (
-    <motion.div initial={{ scale: 0, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} className="absolute z-20" style={{ top, left }}>
-      <div className={`w-3 h-3 rounded-full ${active ? 'bg-primary' : 'bg-secondary'}`} title={`${label} (${latency})`} />
+    <motion.div
+      initial={{ scale: 0, opacity: 0 }}
+      animate={{ scale: 1, opacity: 1 }}
+      className="absolute z-20 cursor-pointer"
+      style={{ top, left }}
+      onMouseEnter={() => setIsHovered(true)}
+      onMouseLeave={() => setIsHovered(false)}
+      onClick={() => onClick(node)}
+    >
+      {/* Outer Glow Animation */}
+      <motion.div
+        animate={{ scale: [1, 1.8, 1], opacity: [0.4, 0, 0.4] }}
+        transition={{ duration: 2.5, repeat: Infinity, ease: "easeInOut" }}
+        className={`absolute inset-[-4px] rounded-full ${active ? 'bg-primary' : 'bg-secondary'}`}
+        style={{ filter: 'blur(4px)' }}
+      />
+
+      {/* Pulse Effect */}
+      <motion.div
+        animate={{ scale: [1, 2.2, 1], opacity: [0.2, 0, 0.2] }}
+        transition={{ duration: 3, repeat: Infinity, ease: "linear" }}
+        className={`absolute inset-[-8px] rounded-full ${active ? 'bg-primary' : 'bg-secondary'}`}
+        style={{ filter: 'blur(8px)' }}
+      />
+
+      {/* Core Dot */}
+      <div className={`relative w-3.5 h-3.5 rounded-full border-2 border-white/30 shadow-lg ${active ? 'bg-primary shadow-[0_0_15px_rgba(0,242,234,0.6)]' : 'bg-secondary shadow-[0_0_15px_rgba(255,0,234,0.6)]'}`} />
+
+      {/* Expanded invisible hover area */}
+      <div className="absolute inset-[-15px] rounded-full z-10 bg-transparent" />
+
+      {/* Tooltip */}
+      <AnimatePresence>
+        {isHovered && (
+          <motion.div
+            initial={{ opacity: 0, y: 15, scale: 0.95 }}
+            animate={{ opacity: 1, y: -50, scale: 1 }}
+            exit={{ opacity: 0, y: 15, scale: 0.95 }}
+            className="absolute left-1/2 -translate-x-1/2 bg-surface/95 backdrop-blur-xl border border-white/10 rounded-2xl p-4 shadow-[0_20px_50px_rgba(0,0,0,0.5)] z-30 min-w-[180px]"
+          >
+            <div className="flex flex-col gap-2">
+              <div className="flex justify-between items-center">
+                <span className="text-white font-black text-xs tracking-wider">{node.country_code} PEER</span>
+                <span className={`text-[8px] px-2 py-0.5 rounded-full font-bold uppercase ${node.group === 'COMMUNITY' ? 'bg-primary/20 text-primary border border-primary/20' : 'bg-secondary/20 text-secondary border border-secondary/20'}`}>
+                  {node.group}
+                </span>
+              </div>
+
+              <div className="text-text-muted text-[10px] flex items-center gap-1.5 opacity-80">
+                <Shield className="w-3 h-3" />
+                <span>{node.provider || (node.group === 'COMMUNITY' ? 'Decentralized Peer' : 'Public Node')}</span>
+              </div>
+
+              <div className="space-y-1.5 mt-1">
+                <div className="flex justify-between items-center text-[10px]">
+                  <span className="text-text-muted/60 font-medium">Latency</span>
+                  <span className="text-success font-mono font-bold">{node.latency_ms}ms</span>
+                </div>
+                <div className="flex justify-between items-center text-[10px]">
+                  <span className="text-text-muted/60 font-medium">Bandwidth</span>
+                  <span className="text-primary font-mono font-bold">{node.bandwidth_mbps} Mbps</span>
+                </div>
+                <div className="flex justify-between items-center text-[10px]">
+                  <span className="text-text-muted/60 font-medium">SafeGuard</span>
+                  <span className="text-white/40 font-mono italic">Verified Agent</span>
+                </div>
+              </div>
+            </div>
+            {/* Arrow */}
+            <div className="absolute bottom-[-6px] left-1/2 -translate-x-1/2 w-3 h-3 bg-surface/95 border-r border-b border-white/10 rotate-45" />
+          </motion.div>
+        )}
+      </AnimatePresence>
     </motion.div>
   );
 }

@@ -55,32 +55,46 @@ func StartTunnel(tunFd C.int, configJSON *C.char) C.int {
 		return -1
 	}
 
-	// 1. Build Minimal sing-box config (No auto_route, no complex registries)
+	// 1. Build Minimal sing-box config
 	host, port, _ := splitAddr(cfg.PeerEndpoint)
+	
+	endpoint := map[string]interface{}{
+		"type":        "wireguard",
+		"tag":         "wg-out",
+		"address":     []string{cfg.VirtualIP + "/32"},
+		"private_key": cfg.PrivateKey,
+		"peers": []interface{}{
+			map[string]interface{}{
+				"address":     host,
+				"port":        port,
+				"public_key":  cfg.PeerPublicKey,
+				"allowed_ips": []string{"0.0.0.0/0"},
+			},
+		},
+		"mtu": cfg.MTU,
+	}
+
 	outbound := map[string]interface{}{
-		"type":          "wireguard",
-		"tag":           "proxy",
-		"server":        host,
-		"server_port":   port,
-		"local_address": []string{cfg.VirtualIP + "/32"},
-		"private_key":   cfg.PrivateKey,
-		"public_key":    cfg.PeerPublicKey,
-		"mtu":           cfg.MTU,
+		"type":      "selector",
+		"tag":       "proxy",
+		"outbounds": []string{"wg-out"},
+		"default":   "wg-out",
 	}
 
 	tunInbound := map[string]interface{}{
-		"type":          "tun",
-		"tag":           "tun-in",
-		"mtu":           cfg.MTU,
-		"inet4_address": []string{cfg.VirtualIP + "/32"},
-		"stack":         "gvisor",
-		"auto_route":    false, // TEST: Disable auto_route to avoid platform registry
+		"type":       "tun",
+		"tag":        "tun-in",
+		"mtu":        cfg.MTU,
+		"address":    []string{cfg.VirtualIP + "/32"},
+		"stack":      "gvisor",
+		"auto_route": false,
 	}
 
 	configMap := map[string]interface{}{
 		"log": map[string]interface{}{
 			"level": "trace",
 		},
+		"endpoints": []interface{}{endpoint},
 		"inbounds":  []interface{}{tunInbound},
 		"outbounds": []interface{}{outbound},
 	}
@@ -127,21 +141,21 @@ func StopTunnel() {
 }
 
 func buildConfigMap(tunFd int, cfg ConnectResponse) map[string]interface{} {
-	endpoint := cfg.PeerEndpoint
-	if endpoint == "" {
-		endpoint = cfg.ServerEndpoint
+	endpointAddr := cfg.PeerEndpoint
+	if endpointAddr == "" {
+		endpointAddr = cfg.ServerEndpoint
 	}
-	host, port, _ := splitAddr(endpoint)
+	host, port, _ := splitAddr(endpointAddr)
 
 	// Build Inbound
 	tunInbound := map[string]interface{}{
-		"type":          "tun",
-		"tag":           "tun-in",
-		"mtu":           cfg.MTU,
-		"inet4_address": []string{cfg.VirtualIP + "/32"},
-		"stack":         "gvisor",
-		"auto_route":    true,
-		"strict_route":  true,
+		"type":         "tun",
+		"tag":          "tun-in",
+		"mtu":          cfg.MTU,
+		"address":      []string{cfg.VirtualIP + "/32"},
+		"stack":        "gvisor",
+		"auto_route":   true,
+		"strict_route": true,
 	}
 
 	// On Android, use the provided File Descriptor
@@ -149,53 +163,48 @@ func buildConfigMap(tunFd int, cfg ConnectResponse) map[string]interface{} {
 		tunInbound["fd"] = tunFd
 	}
 
-	// Build Outbound
-	var outbound map[string]interface{}
+	var endpoints []interface{}
+	var outbounds []interface{}
+
+	// Build Outbound/Endpoint
 	switch cfg.Protocol {
 	case "WireGuard":
-		outbound = map[string]interface{}{
-			"type":          "wireguard",
-			"tag":           "proxy",
-			"server":        host,
-			"server_port":   port,
-			"local_address": []string{cfg.VirtualIP + "/32"},
-			"private_key":   cfg.PrivateKey,
-			"public_key":    cfg.PeerPublicKey,
-			"mtu":           cfg.MTU,
-		}
+		endpoints = append(endpoints, map[string]interface{}{
+			"type":        "wireguard",
+			"tag":         "wg-out",
+			"address":     []string{cfg.VirtualIP + "/32"},
+			"private_key": cfg.PrivateKey,
+			"peers": []interface{}{
+				map[string]interface{}{
+					"address":     host,
+					"port":        port,
+					"public_key":  cfg.PeerPublicKey,
+					"allowed_ips": []string{"0.0.0.0/0"},
+				},
+			},
+			"mtu": cfg.MTU,
+		})
+		outbounds = append(outbounds, map[string]interface{}{
+			"type":      "selector",
+			"tag":       "proxy",
+			"outbounds": []string{"wg-out"},
+			"default":   "wg-out",
+		})
 	case "Shadowsocks":
-		outbound = map[string]interface{}{
+		outbounds = append(outbounds, map[string]interface{}{
 			"type":        "shadowsocks",
 			"tag":         "proxy",
 			"server":      host,
 			"server_port": port,
 			"method":      "aes-256-gcm",
 			"password":    cfg.Password,
-		}
-	case "Hysteria2":
-		outbound = map[string]interface{}{
-			"type":        "hysteria2",
+		})
+	default:
+		// Fallback for others
+		outbounds = append(outbounds, map[string]interface{}{
+			"type":        "direct",
 			"tag":         "proxy",
-			"server":      host,
-			"server_port": port,
-			"password":    cfg.Password,
-		}
-	case "VLESS":
-		outbound = map[string]interface{}{
-			"type":        "vless",
-			"tag":         "proxy",
-			"server":      host,
-			"server_port": port,
-			"uuid":        cfg.UUID,
-		}
-	case "Trojan":
-		outbound = map[string]interface{}{
-			"type":        "trojan",
-			"tag":         "proxy",
-			"server":      host,
-			"server_port": port,
-			"password":    cfg.Password,
-		}
+		})
 	}
 
 	// Build DNS
@@ -211,11 +220,11 @@ func buildConfigMap(tunFd int, cfg ConnectResponse) map[string]interface{} {
 
 	// Build Route
 	routeConfig := map[string]interface{}{
-		"auto_route": true,
+		"auto_detect_interface": true,
 		"rules": []interface{}{
 			map[string]interface{}{
 				"protocol": "dns",
-				"outbound": "dns-out",
+				"action":   "hijack-dns",
 			},
 			map[string]interface{}{
 				"inbound":  []string{"tun-in"},
@@ -229,10 +238,12 @@ func buildConfigMap(tunFd int, cfg ConnectResponse) map[string]interface{} {
 		"type": "dns",
 		"tag":  "dns-out",
 	}
+	outbounds = append(outbounds, dnsOutbound)
 
 	return map[string]interface{}{
+		"endpoints": endpoints,
 		"inbounds":  []interface{}{tunInbound},
-		"outbounds": []interface{}{outbound, dnsOutbound},
+		"outbounds": outbounds,
 		"dns":       dnsConfig,
 		"route":     routeConfig,
 	}

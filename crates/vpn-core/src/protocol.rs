@@ -15,6 +15,8 @@ pub enum VpnProtocol {
     Trojan,
     /// Advanced stealth protocol for high-censorship areas
     VLESS,
+    /// Traditional OpenVPN protocol (used by VPNGate/VPNBook)
+    OpenVPN,
 }
 impl VpnProtocol {
     /// Returns the name of the protocol
@@ -26,6 +28,7 @@ impl VpnProtocol {
             VpnProtocol::Hysteria2 => "Hysteria2",
             VpnProtocol::Trojan => "Trojan",
             VpnProtocol::VLESS => "VLESS",
+            VpnProtocol::OpenVPN => "OpenVPN",
         }
     }
 
@@ -36,6 +39,7 @@ impl VpnProtocol {
             VpnProtocol::Shadowsocks => 8388,
             VpnProtocol::Trojan | VpnProtocol::VLESS => 443,
             VpnProtocol::Hysteria2 => 32400,
+            VpnProtocol::OpenVPN => 1194,
         }
     }
 
@@ -59,6 +63,7 @@ impl VpnProtocol {
             VpnProtocol::Shadowsocks => 0.85,
             VpnProtocol::WireGuardObfuscated => 0.75,
             VpnProtocol::Trojan | VpnProtocol::VLESS => 0.7,
+            VpnProtocol::OpenVPN => 0.6,
         }
     }
 
@@ -71,6 +76,7 @@ impl VpnProtocol {
             VpnProtocol::Shadowsocks => 0.85,
             VpnProtocol::WireGuardObfuscated => 0.8,
             VpnProtocol::WireGuard => 0.3,
+            VpnProtocol::OpenVPN => 0.2,
         }
     }
 }

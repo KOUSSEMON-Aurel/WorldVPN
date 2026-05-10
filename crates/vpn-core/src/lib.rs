@@ -17,4 +17,4 @@ pub mod api;
 pub mod tunnel;
 pub mod mock;
 pub mod fallback;
-pub mod warp;
+pub mod public_gate;

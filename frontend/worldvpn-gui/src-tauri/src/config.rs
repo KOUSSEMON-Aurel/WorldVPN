@@ -5,71 +5,123 @@ pub fn build_sing_box_config(
     protocol: &str,
     server_addr: SocketAddr,
     assigned_ip: &str,
-    private_key: &[u8],
-    peer_public_key: &[u8],
+    private_key_b64: &str,
+    peer_pub_b64: &str,
     mtu: u32,
 ) -> Value {
     let host = server_addr.ip().to_string();
     let port = server_addr.port();
 
-    // 1. Outbounds
-    let outbound = if protocol == "WireGuard" {
-        json!({
-            "type": "wireguard",
-            "tag": "proxy",
-            "address": [format!("{}/32", assigned_ip)],
-            "private_key": hex::encode(private_key),
-            "peers": [
-                {
-                    "address": host,
-                    "port": port,
-                    "public_key": hex::encode(peer_public_key)
-                }
-            ],
-            "mtu": mtu,
-        })
+    // Endpoints - WireGuard MUST be an endpoint in sing-box 1.13+
+    let endpoints = if protocol == "WireGuard" {
+        json!([
+            {
+                "type": "wireguard",
+                "tag": "wg-out",
+                "address": [format!("{}/32", assigned_ip)],
+                "private_key": private_key_b64,
+                "peers": [
+                    {
+                        "address": host,
+                        "port": port,
+                        "public_key": peer_pub_b64,
+                        "allowed_ips": ["0.0.0.0/0"]
+                    }
+                ],
+                "mtu": mtu
+            }
+        ])
     } else {
-        // Fallback for other protocols if needed (currently minimal)
-        json!({
-            "type": "direct",
-            "tag": "proxy"
-        })
+        json!([])
     };
 
-    let dns_outbound = json!({
-        "type": "dns",
-        "tag": "dns-out"
-    });
+    // Outbounds
+    let outbounds = if protocol == "WireGuard" {
+        json!([
+            {
+                "type": "selector",
+                "tag": "proxy",
+                "outbounds": ["wg-out", "direct-out"],
+                "default": "wg-out"
+            },
+            {
+                "type": "direct",
+                "tag": "direct-out"
+            }
+        ])
+    } else if protocol == "Shadowsocks" {
+        let parts: Vec<&str> = peer_pub_b64.split(':').collect();
+        let method = parts.get(0).unwrap_or(&"aes-256-gcm"); // Better default for VPNGate
+        let password = parts.get(1).unwrap_or(&"m");
 
-    // 2. Inbounds
-    let tun_inbound = json!({
-        "type": "tun",
-        "tag": "tun-in",
-        "mtu": mtu,
-        "inet4_address": [format!("{}/32", assigned_ip)],
-        "stack": "gvisor",
-        "auto_route": true,
-        "strict_route": true
-    });
+        json!([
+            {
+                "type": "selector",
+                "tag": "proxy",
+                "outbounds": ["ss-out", "direct-out"],
+                "default": "ss-out"
+            },
+            {
+                "type": "shadowsocks",
+                "tag": "ss-out",
+                "server": host,
+                "server_port": port,
+                "method": method,
+                "password": password
+            },
+            {
+                "type": "direct",
+                "tag": "direct-out"
+            }
+        ])
+    } else {
+        json!([
+            {
+                "type": "direct",
+                "tag": "proxy"
+            }
+        ])
+    };
 
-    // 3. DNS
-    let dns_config = json!({
+    // DNS - Enhanced for reliability and blocking leaks
+    let dns = json!({
         "servers": [
             {
-                "address": "1.1.1.1",
-                "tag": "cloudflare"
+                "tag": "cloudflare",
+                "address": "udp://1.1.1.1",
+                "detour": "proxy"
             }
         ],
-        "strategy": "prefer_ipv4"
+        "rules": [
+            {
+                "outbound": "any",
+                "server": "cloudflare"
+            }
+        ],
+        "strategy": "prefer_ipv4",
+        "disable_cache": false
     });
 
-    // 4. Route
-    let route_config = json!({
-        "auto_route": true,
+    // Inbounds (TUN)
+    let inbounds = json!([
+        {
+            "type": "tun",
+            "tag": "tun-in",
+            "address": [format!("{}/32", assigned_ip)],
+            "auto_route": true, 
+            "strict_route": true,
+            "stack": "gvisor",
+            "mtu": mtu
+        }
+    ]);
+
+    // Routing
+    let route = json!({
+        "auto_detect_interface": true,
         "rules": [
             {
                 "protocol": "dns",
-                "outbound": "dns-out"
+                "action": "hijack-dns"
             },
             {
                 "inbound": ["tun-in"],
@@ -83,9 +135,10 @@ pub fn build_sing_box_config(
             "level": "trace",
             "timestamp": true
         },
-        "inbounds": [tun_inbound],
-        "outbounds": [outbound, dns_outbound],
-        "dns": dns_config,
-        "route": route_config
+        "dns": dns,
+        "endpoints": endpoints,
+        "inbounds": inbounds,
+        "outbounds": outbounds,
+        "route": route
     })
 }

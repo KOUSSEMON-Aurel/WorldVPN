@@ -1,4 +1,5 @@
 use std::sync::{Arc, Mutex};
+use base64::prelude::*;
 use tauri::State;
 use serde::{Serialize, Deserialize};
 use vpn_core::{
@@ -7,7 +8,6 @@ use vpn_core::{
     p2p::PeerDiscovery,
 };
 use tokio::sync::OnceCell;
-use std::net::{IpAddr, SocketAddr};
 use tauri::Manager;
 use std::path::PathBuf;
 use std::fs;
@@ -46,6 +46,7 @@ pub struct P2pStats {
 struct VpnStatus {
     state: ConnectionState,
     current_ip: Option<String>,
+    country: Option<String>,
     protocol: Option<String>,
     bytes_up: u64,
     bytes_down: u64,
@@ -58,6 +59,7 @@ impl Default for VpnStatus {
         Self {
             state: ConnectionState::Disconnected,
             current_ip: None,
+            country: None,
             protocol: None,
             bytes_up: 0,
             bytes_down: 0,
@@ -196,6 +198,7 @@ async fn connect_vpn(
         "Shadowsocks" => vpn_core::protocol::VpnProtocol::Shadowsocks,
         "Trojan" => vpn_core::protocol::VpnProtocol::Trojan,
         "VLESS" => vpn_core::protocol::VpnProtocol::VLESS,
+        "OpenVPN" => vpn_core::protocol::VpnProtocol::OpenVPN,
         _ => vpn_core::protocol::VpnProtocol::WireGuard,
     };
 
@@ -209,20 +212,34 @@ async fn connect_vpn(
     let mut final_endpoint = info.server_endpoint.clone();
     let mut final_assigned_ip = info.assigned_ip.clone();
     let mut final_private_key = private_key.to_vec();
-    let mut final_peer_pub = info.server_public_key.as_ref()
-        .and_then(|k| hex::decode(k).ok())
-        .unwrap_or_default();
+    let mut final_peer_pub_raw = info.server_public_key.clone().unwrap_or_default();
+    let mut final_ovpn_content = String::new();
+    let mut final_peer_pub = if chosen_proto == vpn_core::protocol::VpnProtocol::WireGuard {
+        if final_peer_pub_raw == "ServerPublicKey_BASE64_PLACEHOLDER" {
+             // Force fallback because backend sent a mock key
+             final_endpoint = "error.worldvpn.net:0".to_string();
+             vec![]
+        } else {
+            info.server_public_key.as_ref()
+                .and_then(|k| hex::decode(k).ok())
+                .unwrap_or_default()
+        }
+    } else {
+        vec![] // Not a byte key for other protocols
+    };
     
     // Tier 2: Automatic Fallback to Cloudflare WARP if P2P fails
     if final_endpoint.starts_with("error.worldvpn.net") {
-        println!("No P2P nodes available, triggering Fallback (Cloudflare WARP)...");
-        let fallback_manager = FallbackManager::new(true);
+        println!("No P2P nodes available, triggering Public Gate Fallback...");
+        
+        let fallback_manager = FallbackManager::new(); 
         match fallback_manager.get_fallback_config(&country).await {
             Ok(fallback) => {
-                println!("Fallback obtained: {:?} at {}", fallback.provider, fallback.server_ip);
+                println!("Public Gate Fallback obtained: {:?} at {}", fallback.provider, fallback.server_ip);
                 final_endpoint = format!("{}:{}", fallback.server_ip, fallback.port);
                 chosen_proto = fallback.protocol;
                 final_assigned_ip = fallback.assigned_ip;
+                let final_country = country.clone(); // Keep track of country even after fallback
                 
                 if let Some(ref priv_key_b64) = fallback.private_key {
                     use base64::{Engine as _, engine::general_purpose};
@@ -232,10 +249,19 @@ async fn connect_vpn(
                 }
                 
                 if let Some(ref pub_key_b64) = fallback.peer_public_key {
+                    final_peer_pub_raw = pub_key_b64.clone();
                     use base64::{Engine as _, engine::general_purpose};
                     if let Ok(bytes) = general_purpose::STANDARD.decode(pub_key_b64) {
                         final_peer_pub = bytes;
                     }
+                } else if chosen_proto == vpn_core::protocol::VpnProtocol::Shadowsocks {
+                    // Default for public VPNGate nodes if not specified by API
+                    final_peer_pub_raw = "chacha20-ietf-poly1305:m".to_string();
+                }
+
+                // Capture OpenVPN config if present in fallback/public node metadata
+                if let Some(config) = fallback.raw_config {
+                    final_ovpn_content = config;
                 }
             },
             Err(e) => return Err(format!("Total network failure: Both P2P and Fallback failed. {}", e)),
@@ -253,39 +279,109 @@ async fn connect_vpn(
 
     if !final_endpoint.contains(':') {
         final_endpoint = format!("{}:51820", final_endpoint);
+    } else if final_endpoint.ends_with(":0") {
+        final_endpoint = format!("{}2408", &final_endpoint[..final_endpoint.len()-1]);
     }
 
     // 3. Establish Tunnel Settings
-    let server_addr: SocketAddr = final_endpoint.parse().map_err(|e| format!("Invalid endpoint ({}): {}", final_endpoint, e))?;
-    
-    // 4. Generate sing-box config
-    let sb_config = config::build_sing_box_config(
-        if chosen_proto == vpn_core::protocol::VpnProtocol::WireGuard { "WireGuard" } else { "Other" },
-        server_addr,
-        &final_assigned_ip,
-        if final_private_key.len() >= 32 { &final_private_key[..32] } else { &final_private_key },
-        if final_peer_pub.len() >= 32 { &final_peer_pub[..32] } else { &final_peer_pub },
-        1420
-    );
+    let mut addrs = tokio::net::lookup_host(&final_endpoint).await
+        .map_err(|e| format!("Invalid endpoint or DNS failure ({}): {}", final_endpoint, e))?;
+    let server_addr = addrs.next()
+        .ok_or_else(|| format!("Could not resolve endpoint: {}", final_endpoint))?;
+    println!("Connecting to endpoint: {} (Port: {})", server_addr.ip(), server_addr.port());
 
-    let mut config_path = app_handle.path().app_data_dir().map_err(|e| e.to_string())?;
-    fs::create_dir_all(&config_path).ok();
-    config_path.push("sing-box-config.json");
-    
-    fs::write(&config_path, serde_json::to_string_pretty(&sb_config).map_err(|e| e.to_string())?)
-        .map_err(|e| format!("Failed to write config: {}", e))?;
+    if chosen_proto == vpn_core::protocol::VpnProtocol::OpenVPN {
+        // Special Path for OpenVPN: Write .ovpn file
+        let mut config_path = app_handle.path().app_data_dir().map_err(|e| e.to_string())?;
+        config_path.push("config.ovpn");
 
-    // 5. Start Tunnel Sidecar
-    let tunnel_state: State<'_, TunnelState> = app_handle.state();
-    tunnel::start_tunnel(app_handle.clone(), tunnel_state, config_path.to_string_lossy().to_string())
-        .await
-        .map_err(|e| e.to_string())?;
+        let ovpn_content = final_ovpn_content;
 
-    // Update status
+        // The config from VPNGate is Base64
+        let decoded_config = if ovpn_content.len() > 100 {
+             use base64::{Engine as _, engine::general_purpose};
+             general_purpose::STANDARD.decode(ovpn_content.trim())
+                .map(|b| String::from_utf8_lossy(&b).to_string())
+                .unwrap_or(ovpn_content)
+        } else {
+            ovpn_content
+        };
+
+        // Create a credentials file for VPNGate (uses vpn:vpn)
+        let mut creds_path = app_handle.path().app_data_dir().map_err(|e| e.to_string())?;
+        creds_path.push("creds.txt");
+        let _ = fs::write(&creds_path, "vpn\nvpn\n"); // Standard username/password
+
+        // Strip existing conflicting lines and rebuild config cleanly
+        let mut new_config: Vec<String> = decoded_config
+            .lines()
+            .filter(|l| {
+                let trimmed = l.trim();
+                !trimmed.starts_with("auth-user-pass")
+                    && !trimmed.starts_with("data-ciphers")
+            })
+            .map(|s| s.to_string())
+            .collect();
+
+        // Inject correct credentials path
+        new_config.push(format!("auth-user-pass {}", creds_path.to_string_lossy()));
+
+        // Inject modern and legacy ciphers & fallback to prevent negotiation crashes
+        new_config.push("data-ciphers DEFAULT:AES-128-GCM:AES-256-GCM:AES-128-CBC:AES-256-CBC:CHACHA20-POLY1305".to_string());
+        new_config.push("data-ciphers-fallback AES-128-CBC".to_string());
+
+        let final_config = new_config.join("\n");
+
+        fs::write(&config_path, &final_config).map_err(|e| e.to_string())?;
+        println!("OpenVPN config written to: {:?}", config_path);
+
+        let tunnel_state: State<'_, TunnelState> = app_handle.state();
+        tunnel::start_tunnel(app_handle.clone(), tunnel_state, config_path.to_string_lossy().to_string(), "OpenVPN".to_string())
+            .await
+            .map_err(|e| e.to_string())?;
+    } else {
+        // Standard Sing-box Path
+        let priv_key_32 = if final_private_key.len() >= 32 { &final_private_key[..32] } else { &final_private_key };
+        let priv_key_b64 = BASE64_STANDARD.encode(priv_key_32);
+
+        let pub_key_32 = if final_peer_pub.len() >= 32 { &final_peer_pub[..32] } else { &final_peer_pub };
+        let _pub_key_b64 = BASE64_STANDARD.encode(pub_key_32);
+
+        let proto_name = format!("{:?}", chosen_proto);
+        println!("Building sing-box config for protocol: {}", proto_name);
+        let sb_config = config::build_sing_box_config(
+            &proto_name,
+            server_addr,
+            &final_assigned_ip,
+            &priv_key_b64,
+            &final_peer_pub_raw,
+            1280
+        );
+
+        let mut config_path = app_handle.path().app_data_dir().map_err(|e| e.to_string())?;
+        fs::create_dir_all(&config_path).ok();
+        config_path.push("sing-box-config.json");
+        
+        let config_json = serde_json::to_string_pretty(&sb_config).map_err(|e| e.to_string())?;
+        fs::write(&config_path, &config_json)
+            .map_err(|e| format!("Failed to write config: {}", e))?;
+        
+        println!("Sing-box config written to: {:?}", config_path);
+
+        // 5. Start Tunnel Sidecar
+        println!("Spawning sing-box sidecar...");
+        let tunnel_state: State<'_, TunnelState> = app_handle.state();
+        tunnel::start_tunnel(app_handle.clone(), tunnel_state, config_path.to_string_lossy().to_string(), proto_name)
+            .await
+            .map_err(|e| e.to_string())?;
+    }
+
+    println!("VPN Tunnel Started successfully.");
     let status = {
         let mut status = state.vpn_status.lock().map_err(|_| "VPN status lock poisoned")?;
         status.state = ConnectionState::Connected;
         status.current_ip = Some(final_assigned_ip);
+        status.country = Some(country);
         status.protocol = Some(protocol);
         status.connected_since = Some(chrono::Utc::now().timestamp());
         status.clone()
@@ -398,23 +494,44 @@ fn get_vpn_metrics(state: State<'_, AppState>) -> VpnMetrics {
 }
 
 #[tauri::command]
-async fn get_nodes(group: String, state: State<'_, AppState>) -> Result<serde_json::Value, String> {
+async fn get_nodes(group: String, _state: State<'_, AppState>) -> Result<serde_json::Value, String> {
     if group == "COMMUNITY" {
-        Ok(serde_json::json!([
-            { "id": "4", "country_code": "FR", "bandwidth_mbps": 20, "latency_ms": 10, "group": "COMMUNITY" },
-            { "id": "5", "country_code": "IN", "bandwidth_mbps": 15, "latency_ms": 65, "group": "COMMUNITY" }
-        ]))
+        Ok(serde_json::json!([]))
     } else {
-        match state.api_client.fetch_public_nodes().await {
-            Ok(nodes) => Ok(nodes),
-            Err(_) => {
-                Ok(serde_json::json!([
-                    { "id": "1", "country_code": "JP", "bandwidth_mbps": 100, "latency_ms": 120, "group": "PUBLIC" },
-                    { "id": "2", "country_code": "US", "bandwidth_mbps": 80, "latency_ms": 45, "group": "PUBLIC" },
-                    { "id": "3", "country_code": "DE", "bandwidth_mbps": 50, "latency_ms": 15, "group": "PUBLIC" }
-                ]))
-            }
-        }
+        // Fetch all public nodes (VPNGate, SS-Lists, etc.)
+        let nodes = vpn_core::public_gate::fetch_all_public_nodes().await;
+        
+        let json_nodes: Vec<serde_json::Value> = nodes.into_iter().map(|n| {
+            let (lat, lon) = get_coords(&n.country);
+            serde_json::json!({
+                "id": n.id,
+                "country_code": n.country,
+                "lat": lat,
+                "lon": lon,
+                "bandwidth_mbps": 100,
+                "latency_ms": 50,
+                "group": "PUBLIC",
+                "provider": n.provider,
+                "protocol": format!("{:?}", n.protocol)
+            })
+        }).collect();
+        
+        Ok(serde_json::json!(json_nodes))
+    }
+}
+
+fn get_coords(cc: &str) -> (f64, f64) {
+    match cc {
+        "JP" => (35.6895, 139.6917),
+        "FR" => (48.8566, 2.3522),
+        "US" => (37.0902, -95.7129),
+        "KR" => (35.9078, 127.7669),
+        "VN" => (14.0583, 108.2772),
+        "TH" => (15.8700, 100.9925),
+        "GB" => (55.3781, -3.4360),
+        "DE" => (51.1657, 10.4515),
+        "CA" => (56.1304, -106.3468),
+        _ => (0.0, 0.0), // Equator/Prime Meridian fallback
     }
 }
 
