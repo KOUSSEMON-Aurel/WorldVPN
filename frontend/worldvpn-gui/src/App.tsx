@@ -240,7 +240,8 @@ function App() {
           country: nodeGroup === "COMMUNITY" ? "FR" : "US",
           token: user?.token || "",
           ovpnConfig: null,
-          ssMetadata: null
+          ssMetadata: null,
+          provider: null
         });
         setStatus("connected");
       } catch (e: any) {
@@ -277,7 +278,8 @@ function App() {
         country: node.country_code,
         token: user?.token || "",
         ovpnConfig: node.ovpn_config || null,
-        ssMetadata: node.ss_metadata || null
+        ssMetadata: node.ss_metadata || null,
+        provider: node.provider || null
       });
       setStatus("connected");
     } catch (e: any) {

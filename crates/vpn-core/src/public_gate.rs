@@ -299,7 +299,7 @@ async fn fetch_vpnbook(backend_url: Option<&str>) -> Result<Vec<VpnNode>, String
     Ok(nodes)
 }
 
-async fn fetch_vpnbook_password(backend_url: Option<&str>) -> Result<String, String> {
+pub async fn fetch_vpnbook_password(backend_url: Option<&str>) -> Result<String, String> {
     let client = reqwest::Client::builder()
         .user_agent("Mozilla/5.0 (compatible; WorldVPN/1.0)")
         .timeout(std::time::Duration::from_secs(15))
