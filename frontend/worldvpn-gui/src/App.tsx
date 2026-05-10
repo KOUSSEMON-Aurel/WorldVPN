@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from "react";
-import { Shield, Globe, Wallet, Settings, Power, Activity, Lock, Users, Radio, LogOut, Zap } from "lucide-react";
+import { Shield, Globe, Wallet, Settings, Power, Activity, Users, Radio, LogOut, Zap } from "lucide-react";
 import { motion, AnimatePresence } from "framer-motion";
 import { invoke } from "@tauri-apps/api/core";
 import { LeafletMap } from "./LeafletMap";
@@ -39,25 +39,15 @@ function App() {
   const [nodes, setNodes] = useState<Node[]>([]);
   const [nodeGroup, setNodeGroup] = useState<NodeGroup>("COMMUNITY");
   const [traffic, setTraffic] = useState({ down: 0, up: 0 });
-  const [p2pStats, setP2pStats] = useState({ connected_peers: 0, known_nodes: 0, total_sent: 0, total_received: 0 });
   const [showImportDialog, setShowImportDialog] = useState(false);
   const [importKeyVal, setImportKeyVal] = useState("");
   const [importError, setImportError] = useState("");
   const [initError, setInitError] = useState<string | null>(null);
+  const [selectedProtocols, setSelectedProtocols] = useState<string[]>(["OpenVPN", "Shadowsocks"]);
 
-  // Poll P2P Stats
-  useEffect(() => {
-    if (!isSharing) return;
-    const interval = setInterval(async () => {
-      try {
-        const stats: any = await invoke("get_p2p_status");
-        setP2pStats(stats);
-      } catch (e) {
-        console.error("P2P polling failed", e);
-      }
-    }, 5000);
-    return () => clearInterval(interval);
-  }, [isSharing]);
+  const AVAILABLE_PROTOCOLS = ["OpenVPN", "Shadowsocks", "L2TP", "SSTP"];
+
+  // removed P2P Stats poll as we are not using the mock
 
   // Load basic settings
   useEffect(() => {
@@ -110,20 +100,12 @@ function App() {
   const [actualIp, setActualIp] = useState("Checking...");
   const [connectedCountry, setConnectedCountry] = useState<string | null>(null);
   const [latency, setLatency] = useState<number | null>(null);
-  const [sessions, setSessions] = useState<any[]>([]);
 
-  // Fetch sessions from backend
-  useEffect(() => {
-    const fetchSessions = async () => {
-      try {
-        const backendSessions: any = await invoke("get_sessions");
-        setSessions(backendSessions);
-      } catch (e) {
-        console.error("Failed to fetch sessions", e);
-      }
-    };
-    fetchSessions();
-  }, []);
+  // Deriving filtered nodes array
+  const filteredNodes = nodes.filter(n => {
+    if (selectedProtocols.length === 0) return true;
+    return selectedProtocols.includes(n.protocol || "");
+  });
 
   // Poll VPN Metrics & Status
   useEffect(() => {
@@ -237,11 +219,9 @@ function App() {
   useEffect(() => {
     const fetchNodes = async () => {
       try {
-        if (activeTab === 'map') {
-          const backendNodes: any = await invoke("get_nodes", { group: nodeGroup });
-          if (Array.isArray(backendNodes)) {
-            setNodes(backendNodes);
-          }
+        const backendNodes: any = await invoke("get_nodes", { group: nodeGroup });
+        if (Array.isArray(backendNodes)) {
+          setNodes(backendNodes);
         }
       } catch (e) {
         console.error("Failed to fetch nodes", e);
@@ -250,7 +230,7 @@ function App() {
     fetchNodes();
     const interval = setInterval(fetchNodes, 10000);
     return () => clearInterval(interval);
-  }, [activeTab, nodeGroup]);
+  }, [nodeGroup]);
   const toggleConnection = async () => {
     if (status === "disconnected") {
       setStatus("connecting");
@@ -260,7 +240,8 @@ function App() {
           country: nodeGroup === "COMMUNITY" ? "FR" : "US",
           token: user?.token || "",
           ovpnConfig: null,
-          ssMetadata: null
+          ssMetadata: null,
+          provider: null
         });
         setStatus("connected");
       } catch (e: any) {
@@ -297,7 +278,8 @@ function App() {
         country: node.country_code,
         token: user?.token || "",
         ovpnConfig: node.ovpn_config || null,
-        ssMetadata: node.ss_metadata || null
+        ssMetadata: node.ss_metadata || null,
+        provider: node.provider || null
       });
       setStatus("connected");
     } catch (e: any) {
@@ -469,45 +451,56 @@ function App() {
                     </h2>
                     <div className={`w-2 h-2 rounded-full ${isSharing ? 'bg-success shadow-[0_0_10px_#00ff9d]' : 'bg-red-500'}`} />
                   </div>
+                  <div className="p-4 border-b border-white/5 bg-white/[0.02] flex flex-wrap gap-2">
+                    {AVAILABLE_PROTOCOLS.map(proto => {
+                      const isActive = selectedProtocols.includes(proto);
+                      return (
+                        <button
+                          key={proto}
+                          onClick={() => {
+                            if (isActive) {
+                              setSelectedProtocols(selectedProtocols.filter(p => p !== proto));
+                            } else {
+                              setSelectedProtocols([...selectedProtocols, proto]);
+                            }
+                          }}
+                          className={`px-3 py-1 rounded-full text-[10px] font-bold uppercase tracking-wider transition-all border ${isActive
+                            ? "bg-primary/20 text-primary border-primary/50"
+                            : "bg-surface text-text-muted border-white/10 hover:border-white/30"
+                            }`}
+                        >
+                          {proto}
+                        </button>
+                      );
+                    })}
+                  </div>
                   <div className="flex-1 overflow-y-auto p-4 space-y-3">
-                    {isSharing ? (
-                      <>
-                        <div className="bg-primary/5 border border-primary/20 rounded-2xl p-4 mb-4">
-                          <div className="flex justify-between items-center mb-3">
-                            <span className="text-[10px] font-bold text-primary uppercase">P2P Network Active</span>
-                            <Radio className="w-3 h-3 text-primary animate-pulse" />
-                          </div>
-                          <div className="grid grid-cols-2 gap-4">
-                            <div>
-                              <div className="text-xl font-bold text-white">{p2pStats.connected_peers}</div>
-                              <div className="text-[9px] text-text-muted uppercase">Connected Peers</div>
+                    <div className="flex justify-between items-center mb-2 px-2">
+                      <span className="text-xs text-text-muted font-bold uppercase">{filteredNodes.length} Servers Found</span>
+                    </div>
+                    {filteredNodes.slice(0, 50).map((node: Node, i: number) => (
+                      <motion.div key={node.id} initial={{ opacity: 0, x: 20 }} animate={{ opacity: 1, x: 0 }} transition={{ delay: Math.min(i * 0.05, 0.5) }} className="bg-surface-highlight/50 rounded-xl p-3 border border-white/5 flex items-center justify-between hover:border-white/20 transition-all cursor-pointer" onClick={() => connectToNode(node)}>
+                        <div className="flex items-center gap-3">
+                          <div className="w-10 h-10 rounded-lg bg-surface flex items-center justify-center font-bold text-sm border border-white/5 shadow-sm text-white/90">{node.country_code}</div>
+                          <div className="flex flex-col">
+                            <div className="text-sm font-medium text-white flex items-center gap-2">
+                              {node.provider} <span className="text-[9px] px-1.5 py-0.5 rounded bg-white/5 text-primary border border-primary/20">{node.protocol}</span>
                             </div>
-                            <div>
-                              <div className="text-xl font-bold text-white">{p2pStats.known_nodes}</div>
-                              <div className="text-[9px] text-text-muted uppercase">Known Nodes</div>
+                            <div className="text-[10px] text-text-muted flex items-center gap-2 mt-0.5">
+                              <span className="text-success font-mono font-bold">{node.latency_ms}ms</span>
+                              <span className="opacity-50">|</span>
+                              <span className="text-secondary font-mono font-bold">{node.bandwidth_mbps} Mbps</span>
                             </div>
                           </div>
                         </div>
-
-                        {sessions.map((session: any, i: number) => (
-                          <motion.div key={session.id} initial={{ opacity: 0, x: 20 }} animate={{ opacity: 1, x: 0 }} transition={{ delay: i * 0.1 }} className="bg-surface-highlight/50 rounded-xl p-3 border border-white/5 flex items-center justify-between">
-                            <div className="flex items-center gap-3">
-                              <div className="w-10 h-10 rounded-lg bg-surface flex items-center justify-center font-bold text-sm border border-white/5">{session.country}</div>
-                              <div>
-                                <div className="text-sm font-medium text-white">{session.bytes}</div>
-                                <div className="text-[10px] uppercase tracking-wide text-text-muted">{session.type}</div>
-                              </div>
-                            </div>
-                            <div className="text-right">
-                              <div className="text-secondary font-mono text-xs font-bold">{session.earning}</div>
-                            </div>
-                          </motion.div>
-                        ))}
-                      </>
-                    ) : (
-                      <div className="h-full flex flex-col items-center justify-center opacity-40 p-8">
-                        <Lock className="w-12 h-12 mb-4 text-text-muted" />
-                        <p className="text-sm font-bold">Sharing Disabled</p>
+                        <div className="text-right">
+                          <button className="px-3 py-1.5 rounded-lg text-xs font-bold bg-white/5 hover:bg-primary/20 hover:text-primary transition-all text-text-muted">Connect</button>
+                        </div>
+                      </motion.div>
+                    ))}
+                    {filteredNodes.length === 0 && (
+                      <div className="h-40 flex flex-col items-center justify-center opacity-40">
+                        <span className="text-sm font-bold mt-2">No nodes matches your filter</span>
                       </div>
                     )}
                   </div>
@@ -528,8 +521,9 @@ function App() {
                   </div>
                 </div>
                 <div className="flex-1 bg-surface/30 border border-white/5 rounded-3xl relative overflow-hidden flex items-center justify-center">
-                  <LeafletMap nodes={nodes} onConnect={connectToNode} nodeGroup={nodeGroup} />
+                  <LeafletMap nodes={filteredNodes} onConnect={connectToNode} nodeGroup={nodeGroup} />
                 </div>
+
               </motion.div>
             )}
 

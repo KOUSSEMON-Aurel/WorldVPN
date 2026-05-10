@@ -46,8 +46,19 @@ pub async fn start_pruning_service(pool: PgPool) {
             Err(e) => error!("❌ Erreur pruning sessions: {:?}", e),
         }
         
-        // 3. Optionnel : Suppression des utilisateurs anonymes inactifs (zéro log)
-        // On garde les utilisateurs ayant des crédits, mais on supprime ceux sans activité longue
+        // 3. Suppression des utilisateurs anonymes inactifs — on purge LEURS sessions d'abord
+        //    pour respecter la contrainte FK sessions_user_id_fkey
+        let _ = sqlx::query(
+            "DELETE FROM sessions WHERE user_id IN (
+                SELECT id FROM users
+                WHERE ed25519_pubkey IS NOT NULL
+                AND last_active < CURRENT_TIMESTAMP - INTERVAL '24 hours'
+                AND credits = 50
+            )"
+        )
+        .execute(&pool)
+        .await;
+
         let user_res = sqlx::query(
             "DELETE FROM users WHERE ed25519_pubkey IS NOT NULL \
              AND last_active < CURRENT_TIMESTAMP - INTERVAL '24 hours' \

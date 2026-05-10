@@ -184,6 +184,7 @@ async fn connect_vpn(
     token: String,
     ovpn_config: Option<String>,
     ss_metadata: Option<String>,
+    provider: Option<String>,
 ) -> Result<VpnStatus, String> {
     let private_key = load_identity(&app_handle)?;
     let identity = IdentityKey::from_bytes(&private_key).map_err(|e| e.to_string())?;
@@ -307,6 +308,22 @@ async fn connect_vpn(
         .ok_or_else(|| format!("Could not resolve endpoint: {}", final_endpoint))?;
     println!("Connecting to endpoint: {} (Port: {})", server_addr.ip(), server_addr.port());
 
+    if chosen_proto == vpn_core::protocol::VpnProtocol::Shadowsocks {
+        println!("Performing TCP pre-flight check to {}", server_addr);
+        if let Err(e) = tokio::time::timeout(std::time::Duration::from_secs(2), tokio::net::TcpStream::connect(&server_addr)).await {
+            return Err(format!("Health check failed (Server Unreachable): {}", e));
+        }
+        println!("TCP pre-flight check successful.");
+    } else if chosen_proto == vpn_core::protocol::VpnProtocol::OpenVPN {
+        if final_ovpn_content.contains("proto tcp") {
+            println!("Performing TCP pre-flight check for OpenVPN to {}", server_addr);
+            if let Err(e) = tokio::time::timeout(std::time::Duration::from_secs(2), tokio::net::TcpStream::connect(&server_addr)).await {
+                return Err(format!("OpenVPN Health check failed (Server Unreachable): {}", e));
+            }
+            println!("TCP pre-flight check successful.");
+        }
+    }
+
     if chosen_proto == vpn_core::protocol::VpnProtocol::OpenVPN {
         // Special Path for OpenVPN: Write .ovpn file
         let mut config_path = app_handle.path().app_data_dir().map_err(|e| e.to_string())?;
@@ -324,10 +341,23 @@ async fn connect_vpn(
             ovpn_content
         };
 
-        // Create a credentials file for VPNGate (uses vpn:vpn)
+        let mut creds_username = "vpn".to_string();
+        let mut creds_password = "vpn".to_string();
+
+        if let Some(p) = provider {
+            if p.to_lowercase() == "vpnbook" {
+                creds_username = "vpnbook".to_string();
+                let backend_url = state.api_client.base_url();
+                match vpn_core::public_gate::fetch_vpnbook_password(Some(backend_url.as_str())).await {
+                    Ok(pwd) => creds_password = pwd,
+                    Err(e) => println!("Warning: could not fetch vpnbook password dynamically: {}", e),
+                }
+            }
+        }
+
         let mut creds_path = app_handle.path().app_data_dir().map_err(|e| e.to_string())?;
         creds_path.push("creds.txt");
-        let _ = fs::write(&creds_path, "vpn\nvpn\n"); // Standard username/password
+        let _ = fs::write(&creds_path, format!("{}\n{}\n", creds_username, creds_password));
 
         // Strip existing conflicting lines and rebuild config cleanly
         let mut new_config: Vec<String> = decoded_config
