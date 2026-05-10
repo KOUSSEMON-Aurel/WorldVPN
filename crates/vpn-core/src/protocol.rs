@@ -17,6 +17,12 @@ pub enum VpnProtocol {
     VLESS,
     /// Traditional OpenVPN protocol (used by VPNGate/VPNBook)
     OpenVPN,
+    /// Layer 2 Tunneling Protocol / IPsec
+    L2tp,
+    /// Secure Socket Tunneling Protocol
+    Sstp,
+    /// SoftEther SSL-VPN Protocol
+    SoftEther,
 }
 impl VpnProtocol {
     /// Returns the name of the protocol
@@ -29,6 +35,9 @@ impl VpnProtocol {
             VpnProtocol::Trojan => "Trojan",
             VpnProtocol::VLESS => "VLESS",
             VpnProtocol::OpenVPN => "OpenVPN",
+            VpnProtocol::L2tp => "L2TP/IPsec",
+            VpnProtocol::Sstp => "MS-SSTP",
+            VpnProtocol::SoftEther => "SoftEther SSL-VPN",
         }
     }
 
@@ -40,6 +49,8 @@ impl VpnProtocol {
             VpnProtocol::Trojan | VpnProtocol::VLESS => 443,
             VpnProtocol::Hysteria2 => 32400,
             VpnProtocol::OpenVPN => 1194,
+            VpnProtocol::L2tp => 500, // UDP
+            VpnProtocol::Sstp | VpnProtocol::SoftEther => 443, // TCP
         }
     }
 
@@ -64,6 +75,8 @@ impl VpnProtocol {
             VpnProtocol::WireGuardObfuscated => 0.75,
             VpnProtocol::Trojan | VpnProtocol::VLESS => 0.7,
             VpnProtocol::OpenVPN => 0.6,
+            VpnProtocol::SoftEther => 0.65,
+            VpnProtocol::L2tp | VpnProtocol::Sstp => 0.5,
         }
     }
 
@@ -75,8 +88,9 @@ impl VpnProtocol {
             VpnProtocol::Hysteria2 => 0.9,
             VpnProtocol::Shadowsocks => 0.85,
             VpnProtocol::WireGuardObfuscated => 0.8,
+            VpnProtocol::SoftEther => 0.5,
             VpnProtocol::WireGuard => 0.3,
-            VpnProtocol::OpenVPN => 0.2,
+            VpnProtocol::OpenVPN | VpnProtocol::L2tp | VpnProtocol::Sstp => 0.2,
         }
     }
 }

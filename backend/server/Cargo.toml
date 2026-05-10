@@ -33,5 +33,6 @@ base64 = "0.22.1"
 tower_governor = "0.4"
 metrics = "0.23"
 metrics-exporter-prometheus = "0.15"
+regex = "1.10"
 
 [dev-dependencies]

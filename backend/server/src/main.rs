@@ -55,6 +55,11 @@ async fn main() -> anyhow::Result<()> {
         services::pruning::start_pruning_service(pruning_pool).await;
     });
 
+    let vpnbook_pool = db_pool.clone();
+    tokio::spawn(async move {
+        services::vpnbook::start_vpnbook_sync(vpnbook_pool).await;
+    });
+
     // Liveness probe on startup
     sqlx::query("SELECT 1").execute(&db_pool).await.expect("DB Health check failed");
 

@@ -48,7 +48,9 @@ parking_lot = "0.12"
 tracing-subscriber.workspace = true
 dotenvy = "0.15.7"
 hex = "0.4.3"
-reqwest = { version = "0.13.3", features = ["json", "gzip", "rustls"] }
+reqwest = { version = "0.13.3", features = ["json", "gzip", "rustls", "multipart", "blocking", "form"] }
 libp2p = { version = "0.53", features = ["tokio", "kad", "gossipsub", "mdns", "tcp", "noise", "yamux", "macros", "dns"] }
 lru = "0.12"
+ss-uri = "0.3.0"
+regex = "1.12.3"
 

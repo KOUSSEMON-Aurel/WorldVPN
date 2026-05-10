@@ -30,14 +30,14 @@ impl FallbackManager {
         Self
     }
 
-    pub async fn get_fallback_config(&self, country: &str) -> Result<FallbackConfig> {
+    pub async fn get_fallback_config(&self, country: &str, backend_url: Option<&str>) -> Result<FallbackConfig> {
         tracing::info!("Fetching public fallback for {}", country);
         
-        let nodes = public_gate::fetch_all_public_nodes().await;
+        let nodes = public_gate::fetch_all_public_nodes(backend_url).await;
         
         // Filter by country or just take the best overall
         let best_node = nodes.iter()
-            .find(|n| n.country == country)
+            .find(|n| n.country_code == country)
             .or_else(|| nodes.first());
             
         if let Some(node) = best_node {
@@ -49,7 +49,7 @@ impl FallbackManager {
                 assigned_ip: "10.10.0.2".to_string(),
                 private_key: None,
                 peer_public_key: None,
-                raw_config: node.ovpn_config.clone(),
+                raw_config: node.openvpn_config.clone(),
             })
         } else {
             Err(VpnError::ConnectionFailed("No public nodes available".into()))

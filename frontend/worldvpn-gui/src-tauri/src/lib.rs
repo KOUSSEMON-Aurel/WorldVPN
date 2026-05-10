@@ -23,6 +23,7 @@ struct AppState {
     is_sharing: Mutex<bool>,
     p2p: OnceCell<Arc<PeerDiscovery>>,
     api_client: VpnApiClient,
+    pub public_nodes_cache: Mutex<Option<(Vec<vpn_core::nodes::VpnNode>, std::time::Instant)>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -181,6 +182,8 @@ async fn connect_vpn(
     protocol: String,
     country: String,
     token: String,
+    ovpn_config: Option<String>,
+    ss_metadata: Option<String>,
 ) -> Result<VpnStatus, String> {
     let private_key = load_identity(&app_handle)?;
     let identity = IdentityKey::from_bytes(&private_key).map_err(|e| e.to_string())?;
@@ -227,19 +230,33 @@ async fn connect_vpn(
     } else {
         vec![] // Not a byte key for other protocols
     };
+
+    // Tier 1.5: If direct metadata was provided (from map selection), use it immediately
+    if let Some(config) = ovpn_config {
+        println!("Using direct OVPN config provided by frontend");
+        final_ovpn_content = config;
+        chosen_proto = vpn_core::protocol::VpnProtocol::OpenVPN;
+        // The endpoint is usually inside OVPN, but we need something for the sidecar
+        // often we can extract it or just use a dummy if start_tunnel doesn't use it for OVPN
+    } else if let Some(meta) = ss_metadata {
+        println!("Using direct Shadowsocks metadata provided by frontend");
+        final_peer_pub_raw = meta; // For Shadowsocks, we store "method:password" here
+        chosen_proto = vpn_core::protocol::VpnProtocol::Shadowsocks;
+    }
     
     // Tier 2: Automatic Fallback to Cloudflare WARP if P2P fails
     if final_endpoint.starts_with("error.worldvpn.net") {
         println!("No P2P nodes available, triggering Public Gate Fallback...");
         
         let fallback_manager = FallbackManager::new(); 
-        match fallback_manager.get_fallback_config(&country).await {
+        let backend_url = state.api_client.base_url();
+        match fallback_manager.get_fallback_config(&country, Some(backend_url)).await {
             Ok(fallback) => {
                 println!("Public Gate Fallback obtained: {:?} at {}", fallback.provider, fallback.server_ip);
                 final_endpoint = format!("{}:{}", fallback.server_ip, fallback.port);
                 chosen_proto = fallback.protocol;
                 final_assigned_ip = fallback.assigned_ip;
-                let final_country = country.clone(); // Keep track of country even after fallback
+                let _final_country = country.clone(); // Keep track of country even after fallback
                 
                 if let Some(ref priv_key_b64) = fallback.private_key {
                     use base64::{Engine as _, engine::general_purpose};
@@ -494,45 +511,56 @@ fn get_vpn_metrics(state: State<'_, AppState>) -> VpnMetrics {
 }
 
 #[tauri::command]
-async fn get_nodes(group: String, _state: State<'_, AppState>) -> Result<serde_json::Value, String> {
+async fn get_nodes(group: String, state: State<'_, AppState>) -> Result<serde_json::Value, String> {
     if group == "COMMUNITY" {
         Ok(serde_json::json!([]))
     } else {
-        // Fetch all public nodes (VPNGate, SS-Lists, etc.)
-        let nodes = vpn_core::public_gate::fetch_all_public_nodes().await;
+        // Retrieve from cache if valid (less than 5 minutes old)
+        {
+            if let Ok(cache) = state.public_nodes_cache.lock() {
+                if let Some((ref nodes, timestamp)) = *cache {
+                    if timestamp.elapsed().as_secs() < 300 {
+                        println!("Returning public nodes from cache ({} nodes)", nodes.len());
+                        return Ok(serde_json::json!(nodes_to_json(nodes)));
+                    }
+                }
+            }
+        }
+
+        println!("Starting public node discovery with backend: {}...", state.api_client.base_url());
+        let nodes = vpn_core::public_gate::fetch_all_public_nodes(Some(state.api_client.base_url())).await;
         
-        let json_nodes: Vec<serde_json::Value> = nodes.into_iter().map(|n| {
-            let (lat, lon) = get_coords(&n.country);
-            serde_json::json!({
-                "id": n.id,
-                "country_code": n.country,
-                "lat": lat,
-                "lon": lon,
-                "bandwidth_mbps": 100,
-                "latency_ms": 50,
-                "group": "PUBLIC",
-                "provider": n.provider,
-                "protocol": format!("{:?}", n.protocol)
-            })
-        }).collect();
+        // Update cache
+        if let Ok(mut cache) = state.public_nodes_cache.lock() {
+            *cache = Some((nodes.clone(), std::time::Instant::now()));
+        }
         
-        Ok(serde_json::json!(json_nodes))
+        Ok(serde_json::json!(nodes_to_json(&nodes)))
     }
 }
 
-fn get_coords(cc: &str) -> (f64, f64) {
-    match cc {
-        "JP" => (35.6895, 139.6917),
-        "FR" => (48.8566, 2.3522),
-        "US" => (37.0902, -95.7129),
-        "KR" => (35.9078, 127.7669),
-        "VN" => (14.0583, 108.2772),
-        "TH" => (15.8700, 100.9925),
-        "GB" => (55.3781, -3.4360),
-        "DE" => (51.1657, 10.4515),
-        "CA" => (56.1304, -106.3468),
-        _ => (0.0, 0.0), // Equator/Prime Meridian fallback
-    }
+// Helper to convert nodes to JSON (matching original logic)
+fn nodes_to_json(nodes: &[vpn_core::nodes::VpnNode]) -> Vec<serde_json::Value> {
+    nodes.iter().map(|n| {
+        let (lat, lon) = (n.latitude, n.longitude); // Use REAL coords from node
+        serde_json::json!({
+            "id": n.id,
+            "country_code": n.country_code,
+            "latency_ms": n.ping_ms.unwrap_or(50),
+            "group": "PUBLIC",
+            "provider": format!("{:?}", n.source),
+            "protocol": format!("{:?}", n.protocol),
+            "ovpn_config": n.openvpn_config,
+            "ss_metadata": if n.protocol == vpn_core::protocol::VpnProtocol::Shadowsocks {
+                Some(format!("{}:{}", n.ss_method.as_deref().unwrap_or(""), n.ss_password.as_deref().unwrap_or("")))
+            } else {
+                None
+            },
+            "bandwidth_mbps": n.speed_mbps.unwrap_or(50.0),
+            "lat": lat,
+            "lon": lon,
+        })
+    }).collect()
 }
 
 #[tauri::command]
@@ -568,6 +596,7 @@ pub fn run() {
             is_sharing: Mutex::new(false),
             p2p: OnceCell::new(),
             api_client,
+            public_nodes_cache: Mutex::new(None),
         })
         .manage(TunnelState::new())
         .plugin(tauri_plugin_shell::init())

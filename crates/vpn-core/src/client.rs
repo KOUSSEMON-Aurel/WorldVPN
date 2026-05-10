@@ -53,6 +53,10 @@ impl VpnApiClient {
         }
     }
 
+    pub fn base_url(&self) -> &str {
+        &self.base_url
+    }
+
     /// Login anonyme (V2) via clé publique Ed25519 et signature (Proof of Work/Identity)
     pub async fn login_with_identity(&self, public_key: String, signature: String, timestamp: String) -> Result<LoginResponse> {
         let url = format!("{}/auth/identity", self.base_url);
