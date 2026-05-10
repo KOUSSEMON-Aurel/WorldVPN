@@ -30,15 +30,18 @@ impl FallbackManager {
         Self
     }
 
-    pub async fn get_fallback_config(&self, country: &str, backend_url: Option<&str>) -> Result<FallbackConfig> {
-        tracing::info!("Fetching public fallback for {}", country);
+    pub async fn get_fallback_config(&self, country: &str, backend_url: Option<&str>, blacklist: &[String]) -> Result<FallbackConfig> {
+        tracing::info!("Fetching public fallback for {} (excluding {} nodes)", country, blacklist.len());
         
         let nodes = public_gate::fetch_all_public_nodes(backend_url).await;
         
-        // Filter by country or just take the best overall
+        // Filter by country or just take the best overall, excluding blacklisted IPs
         let best_node = nodes.iter()
+            .filter(|n| !blacklist.contains(&n.ip))
             .find(|n| n.country_code == country)
-            .or_else(|| nodes.first());
+            .or_else(|| nodes.iter()
+                .filter(|n| !blacklist.contains(&n.ip))
+                .next());
             
         if let Some(node) = best_node {
             Ok(FallbackConfig {

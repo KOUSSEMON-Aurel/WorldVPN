@@ -195,134 +195,166 @@ async fn connect_vpn(
         status.state = ConnectionState::Connecting;
     }
 
-    // 2. Perform matchmaking and connect
-    let mut chosen_proto = match protocol.as_str() {
-        "WireGuard" => vpn_core::protocol::VpnProtocol::WireGuard,
-        "Hysteria 2" => vpn_core::protocol::VpnProtocol::Hysteria2,
-        "Shadowsocks" => vpn_core::protocol::VpnProtocol::Shadowsocks,
-        "Trojan" => vpn_core::protocol::VpnProtocol::Trojan,
-        "VLESS" => vpn_core::protocol::VpnProtocol::VLESS,
-        "OpenVPN" => vpn_core::protocol::VpnProtocol::OpenVPN,
-        _ => vpn_core::protocol::VpnProtocol::WireGuard,
-    };
+    let mut blacklist: Vec<String> = Vec::new();
+    let mut last_error = "Unknown connection error".to_string();
 
-    let info = state.api_client.connect(
-        chosen_proto,
-        identity.public_key_hex(),
-        Some(country.clone()),
-        &token
-    ).await.map_err(|e| e.to_string())?;
-    
-    let mut final_endpoint = info.server_endpoint.clone();
-    let mut final_assigned_ip = info.assigned_ip.clone();
-    let mut final_private_key = private_key.to_vec();
-    let mut final_peer_pub_raw = info.server_public_key.clone().unwrap_or_default();
-    let mut final_ovpn_content = String::new();
-    let mut final_peer_pub = if chosen_proto == vpn_core::protocol::VpnProtocol::WireGuard {
-        if final_peer_pub_raw == "ServerPublicKey_BASE64_PLACEHOLDER" {
-             // Force fallback because backend sent a mock key
-             final_endpoint = "error.worldvpn.net:0".to_string();
-             vec![]
-        } else {
-            info.server_public_key.as_ref()
-                .and_then(|k| hex::decode(k).ok())
-                .unwrap_or_default()
-        }
-    } else {
-        vec![] // Not a byte key for other protocols
-    };
-
-    // Tier 1.5: If direct metadata was provided (from map selection), use it immediately
-    if let Some(config) = ovpn_config {
-        println!("Using direct OVPN config provided by frontend");
-        final_ovpn_content = config;
-        chosen_proto = vpn_core::protocol::VpnProtocol::OpenVPN;
-        // The endpoint is usually inside OVPN, but we need something for the sidecar
-        // often we can extract it or just use a dummy if start_tunnel doesn't use it for OVPN
-    } else if let Some(meta) = ss_metadata {
-        println!("Using direct Shadowsocks metadata provided by frontend");
-        final_peer_pub_raw = meta; // For Shadowsocks, we store "method:password" here
-        chosen_proto = vpn_core::protocol::VpnProtocol::Shadowsocks;
-    }
-    
-    // Tier 2: Automatic Fallback to Cloudflare WARP if P2P fails
-    if final_endpoint.starts_with("error.worldvpn.net") {
-        println!("No P2P nodes available, triggering Public Gate Fallback...");
+    for attempt in 1..=3 {
+        println!("Connection attempt {}/3...", attempt);
         
-        let fallback_manager = FallbackManager::new(); 
-        let backend_url = state.api_client.base_url();
-        match fallback_manager.get_fallback_config(&country, Some(backend_url)).await {
-            Ok(fallback) => {
-                println!("Public Gate Fallback obtained: {:?} at {}", fallback.provider, fallback.server_ip);
-                final_endpoint = format!("{}:{}", fallback.server_ip, fallback.port);
-                chosen_proto = fallback.protocol;
-                final_assigned_ip = fallback.assigned_ip;
-                let _final_country = country.clone(); // Keep track of country even after fallback
-                
-                if let Some(ref priv_key_b64) = fallback.private_key {
-                    use base64::{Engine as _, engine::general_purpose};
-                    if let Ok(bytes) = general_purpose::STANDARD.decode(priv_key_b64) {
-                        final_private_key = bytes;
-                    }
-                }
-                
-                if let Some(ref pub_key_b64) = fallback.peer_public_key {
-                    final_peer_pub_raw = pub_key_b64.clone();
-                    use base64::{Engine as _, engine::general_purpose};
-                    if let Ok(bytes) = general_purpose::STANDARD.decode(pub_key_b64) {
-                        final_peer_pub = bytes;
-                    }
-                } else if chosen_proto == vpn_core::protocol::VpnProtocol::Shadowsocks {
-                    // Default for public VPNGate nodes if not specified by API
-                    final_peer_pub_raw = "chacha20-ietf-poly1305:m".to_string();
-                }
+        // 2. Perform matchmaking and connect
+        let mut chosen_proto = match protocol.as_str() {
+            "WireGuard" => vpn_core::protocol::VpnProtocol::WireGuard,
+            "Hysteria 2" => vpn_core::protocol::VpnProtocol::Hysteria2,
+            "Shadowsocks" => vpn_core::protocol::VpnProtocol::Shadowsocks,
+            "Trojan" => vpn_core::protocol::VpnProtocol::Trojan,
+            "VLESS" => vpn_core::protocol::VpnProtocol::VLESS,
+            "OpenVPN" => vpn_core::protocol::VpnProtocol::OpenVPN,
+            _ => vpn_core::protocol::VpnProtocol::WireGuard,
+        };
 
-                // Capture OpenVPN config if present in fallback/public node metadata
-                if let Some(config) = fallback.raw_config {
-                    final_ovpn_content = config;
-                }
-            },
-            Err(e) => return Err(format!("Total network failure: Both P2P and Fallback failed. {}", e)),
-        }
-    }
-    
-    // Phase 4: E2E Decryption
-    if final_endpoint.starts_with("e2e:") {
-        let encrypted = &final_endpoint[4..];
-        match identity.decrypt_with_identity(encrypted) {
-            Ok(decrypted) => final_endpoint = decrypted,
-            Err(e) => return Err(format!("Échec déchiffrement endpoint: {}", e)),
-        }
-    }
-
-    if !final_endpoint.contains(':') {
-        final_endpoint = format!("{}:51820", final_endpoint);
-    } else if final_endpoint.ends_with(":0") {
-        final_endpoint = format!("{}2408", &final_endpoint[..final_endpoint.len()-1]);
-    }
-
-    // 3. Establish Tunnel Settings
-    let mut addrs = tokio::net::lookup_host(&final_endpoint).await
-        .map_err(|e| format!("Invalid endpoint or DNS failure ({}): {}", final_endpoint, e))?;
-    let server_addr = addrs.next()
-        .ok_or_else(|| format!("Could not resolve endpoint: {}", final_endpoint))?;
-    println!("Connecting to endpoint: {} (Port: {})", server_addr.ip(), server_addr.port());
-
-    if chosen_proto == vpn_core::protocol::VpnProtocol::Shadowsocks {
-        println!("Performing TCP pre-flight check to {}", server_addr);
-        if let Err(e) = tokio::time::timeout(std::time::Duration::from_secs(2), tokio::net::TcpStream::connect(&server_addr)).await {
-            return Err(format!("Health check failed (Server Unreachable): {}", e));
-        }
-        println!("TCP pre-flight check successful.");
-    } else if chosen_proto == vpn_core::protocol::VpnProtocol::OpenVPN {
-        if final_ovpn_content.contains("proto tcp") {
-            println!("Performing TCP pre-flight check for OpenVPN to {}", server_addr);
-            if let Err(e) = tokio::time::timeout(std::time::Duration::from_secs(2), tokio::net::TcpStream::connect(&server_addr)).await {
-                return Err(format!("OpenVPN Health check failed (Server Unreachable): {}", e));
+        let info = state.api_client.connect(
+            chosen_proto,
+            identity.public_key_hex(),
+            Some(country.clone()),
+            &token
+        ).await.map_err(|e| e.to_string())?;
+        
+        let mut final_endpoint = info.server_endpoint.clone();
+        let mut final_assigned_ip = info.assigned_ip.clone();
+        let mut final_private_key = private_key.to_vec();
+        let mut final_peer_pub_raw = info.server_public_key.clone().unwrap_or_default();
+        let mut final_ovpn_content = String::new();
+        let mut final_peer_pub = if chosen_proto == vpn_core::protocol::VpnProtocol::WireGuard {
+            if final_peer_pub_raw == "ServerPublicKey_BASE64_PLACEHOLDER" {
+                 // Force fallback because backend sent a mock key
+                 final_endpoint = "error.worldvpn.net:0".to_string();
+                 vec![]
+            } else {
+                info.server_public_key.as_ref()
+                    .and_then(|k| hex::decode(k).ok())
+                    .unwrap_or_default()
             }
-            println!("TCP pre-flight check successful.");
+        } else {
+            vec![] // Not a byte key for other protocols
+        };
+
+        // Tier 1.5: If direct metadata was provided (from map selection), use it immediately
+        if let Some(ref config) = ovpn_config {
+            println!("Using direct OVPN config provided by frontend");
+            final_ovpn_content = config.clone();
+            chosen_proto = vpn_core::protocol::VpnProtocol::OpenVPN;
+        } else if let Some(ref meta) = ss_metadata {
+            println!("Using direct Shadowsocks metadata provided by frontend");
+            final_peer_pub_raw = meta.clone(); // For Shadowsocks, we store "method:password" here
+            chosen_proto = vpn_core::protocol::VpnProtocol::Shadowsocks;
         }
-    }
+        
+        // Tier 2: Automatic Fallback to Cloudflare WARP if P2P fails
+        if final_endpoint.starts_with("error.worldvpn.net") {
+            println!("No P2P nodes available, triggering Public Gate Fallback...");
+            
+            let fallback_manager = FallbackManager::new(); 
+            let backend_url = state.api_client.base_url();
+            match fallback_manager.get_fallback_config(&country, Some(backend_url), &blacklist).await {
+                Ok(fallback) => {
+                    println!("Public Gate Fallback obtained: {:?} at {}", fallback.provider, fallback.server_ip);
+                    final_endpoint = format!("{}:{}", fallback.server_ip, fallback.port);
+                    chosen_proto = fallback.protocol;
+                    final_assigned_ip = fallback.assigned_ip;
+                    
+                    if let Some(ref priv_key_b64) = fallback.private_key {
+                        use base64::{Engine as _, engine::general_purpose};
+                        if let Ok(bytes) = general_purpose::STANDARD.decode(priv_key_b64) {
+                            final_private_key = bytes;
+                        }
+                    }
+                    
+                    if let Some(ref pub_key_b64) = fallback.peer_public_key {
+                        final_peer_pub_raw = pub_key_b64.clone();
+                        use base64::{Engine as _, engine::general_purpose};
+                        if let Ok(bytes) = general_purpose::STANDARD.decode(pub_key_b64) {
+                            final_peer_pub = bytes;
+                        }
+                    } else if chosen_proto == vpn_core::protocol::VpnProtocol::Shadowsocks {
+                        final_peer_pub_raw = "chacha20-ietf-poly1305:m".to_string();
+                    }
+
+                    if let Some(config) = fallback.raw_config {
+                        final_ovpn_content = config;
+                    }
+                },
+                Err(e) => {
+                    if attempt == 3 {
+                        return Err(format!("Total network failure: Both P2P and Fallback failed. {}", e));
+                    }
+                    println!("Fallback attempt failed, retrying... {}", e);
+                    continue;
+                }
+            }
+        }
+        
+        // Phase 4: E2E Decryption
+        if final_endpoint.starts_with("e2e:") {
+            let encrypted = &final_endpoint[4..];
+            match identity.decrypt_with_identity(encrypted) {
+                Ok(decrypted) => final_endpoint = decrypted,
+                Err(e) => {
+                    last_error = format!("Échec déchiffrement endpoint: {}", e);
+                    continue;
+                }
+            }
+        }
+
+        if !final_endpoint.contains(':') {
+            final_endpoint = format!("{}:51820", final_endpoint);
+        } else if final_endpoint.ends_with(":0") {
+            final_endpoint = format!("{}2408", &final_endpoint[..final_endpoint.len()-1]);
+        }
+
+        // 3. Establish Tunnel Settings
+        let mut addrs = match tokio::net::lookup_host(&final_endpoint).await {
+            Ok(a) => a,
+            Err(e) => {
+                last_error = format!("Invalid endpoint or DNS failure ({}): {}", final_endpoint, e);
+                continue;
+            }
+        };
+        
+        let server_addr = match addrs.next() {
+            Some(a) => a,
+            None => {
+                last_error = format!("Could not resolve endpoint: {}", final_endpoint);
+                continue;
+            }
+        };
+        
+        println!("Checking endpoint health: {} (Port: {})", server_addr.ip(), server_addr.port());
+
+        let mut health_ok = true;
+        if chosen_proto == vpn_core::protocol::VpnProtocol::Shadowsocks {
+            if let Err(e) = tokio::time::timeout(std::time::Duration::from_secs(1), tokio::net::TcpStream::connect(&server_addr)).await {
+                println!("Health check failed for {}: {}", server_addr, e);
+                health_ok = false;
+            }
+        } else if chosen_proto == vpn_core::protocol::VpnProtocol::OpenVPN {
+            if final_ovpn_content.contains("proto tcp") || !final_ovpn_content.contains("proto udp") {
+                if let Err(e) = tokio::time::timeout(std::time::Duration::from_secs(1), tokio::net::TcpStream::connect(&server_addr)).await {
+                    println!("OpenVPN Health check failed for {}: {}", server_addr, e);
+                    health_ok = false;
+                }
+            }
+        }
+
+        if !health_ok {
+            blacklist.push(server_addr.ip().to_string());
+            last_error = format!("Health check failed (Server {} Reachable)", if attempt < 3 { "Not yet" } else { "Un" });
+            continue;
+        }
+
+        println!("Health check successful. Proceeding to tunnel start.");
+        
+        // 4. Start Tunnel (Phase 5)
+        // ... (contient la suite du code, on va fermer la boucle plus bas)
 
     if chosen_proto == vpn_core::protocol::VpnProtocol::OpenVPN {
         // Special Path for OpenVPN: Write .ovpn file
@@ -421,19 +453,22 @@ async fn connect_vpn(
         tunnel::start_tunnel(app_handle.clone(), tunnel_state, config_path.to_string_lossy().to_string(), proto_name)
             .await
             .map_err(|e| e.to_string())?;
+        }
+
+        println!("VPN Tunnel Started successfully.");
+        let status = {
+            let mut status = state.vpn_status.lock().map_err(|_| "VPN status lock poisoned")?;
+            status.state = ConnectionState::Connected;
+            status.current_ip = Some(final_assigned_ip);
+            status.country = Some(country);
+            status.protocol = Some(protocol);
+            status.connected_since = Some(chrono::Utc::now().timestamp());
+            status.clone()
+        };
+        return Ok(status);
     }
 
-    println!("VPN Tunnel Started successfully.");
-    let status = {
-        let mut status = state.vpn_status.lock().map_err(|_| "VPN status lock poisoned")?;
-        status.state = ConnectionState::Connected;
-        status.current_ip = Some(final_assigned_ip);
-        status.country = Some(country);
-        status.protocol = Some(protocol);
-        status.connected_since = Some(chrono::Utc::now().timestamp());
-        status.clone()
-    };
-    Ok(status)
+    Err(last_error)
 }
 
 #[tauri::command]
