@@ -28,6 +28,7 @@ pub struct TunnelHandle {
 pub struct ConnectionConfig {
     pub protocol: VpnProtocol,
     pub server_addr: SocketAddr,
+    pub assigned_ip: IpAddr,
     pub credentials: Credentials,
     pub timeout: Duration,
 }

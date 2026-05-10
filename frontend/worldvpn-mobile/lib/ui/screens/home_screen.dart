@@ -36,7 +36,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
   Widget build(BuildContext context) {
     final status = ref.watch(vpnStatusProvider);
     final isConnected = status == "Connected";
-    final isConnecting = status.contains("...");
+    final isConnecting = status.contains("...") || status.contains("…");
     final downloadSpeed = ref.watch(vpnDownloadSpeedProvider);
     final uploadSpeed = ref.watch(vpnUploadSpeedProvider);
 

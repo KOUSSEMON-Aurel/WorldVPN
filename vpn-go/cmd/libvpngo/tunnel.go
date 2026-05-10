@@ -6,6 +6,7 @@ package main
 import "C"
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -24,6 +25,7 @@ type ConnectResponse struct {
 	VirtualIP      string `json:"assigned_ip"`
 	PeerEndpoint   string `json:"peer_endpoint"`
 	PeerPublicKey  string `json:"peer_public_key"`
+	PrivateKey     string `json:"private_key"`
 	ServerEndpoint string `json:"server_endpoint"`
 	Password       string `json:"password"`
 	UUID           string `json:"uuid"`
@@ -32,38 +34,82 @@ type ConnectResponse struct {
 }
 
 var (
-	mu       sync.Mutex
 	instance *box.Box
+	lock     sync.Mutex
 )
 
 //export StartTunnel
 func StartTunnel(tunFd C.int, configJSON *C.char) C.int {
-	mu.Lock()
-	defer mu.Unlock()
+	lock.Lock()
+	defer lock.Unlock()
 
 	if instance != nil {
-		instance.Close()
-		instance = nil
+		log.Println("[vpn-go] Tunnel already running")
+		return 0
 	}
 
 	cfgStr := C.GoString(configJSON)
 	var cfg ConnectResponse
 	if err := json.Unmarshal([]byte(cfgStr), &cfg); err != nil {
-		log.Printf("[vpn-go] JSON error: %v", err)
+		log.Printf("[vpn-go] JSON unmarshal error: %v", err)
 		return -1
 	}
 
-	// Build JSON config
-	configMap := buildConfigMap(int(tunFd), cfg)
-	jsonBytes, _ := json.Marshal(configMap)
+	// 1. Build Minimal sing-box config
+	host, port, _ := splitAddr(cfg.PeerEndpoint)
+	
+	endpoint := map[string]interface{}{
+		"type":        "wireguard",
+		"tag":         "wg-out",
+		"address":     []string{cfg.VirtualIP + "/32"},
+		"private_key": cfg.PrivateKey,
+		"peers": []interface{}{
+			map[string]interface{}{
+				"address":     host,
+				"port":        port,
+				"public_key":  cfg.PeerPublicKey,
+				"allowed_ips": []string{"0.0.0.0/0"},
+			},
+		},
+		"mtu": cfg.MTU,
+	}
+
+	outbound := map[string]interface{}{
+		"type":      "selector",
+		"tag":       "proxy",
+		"outbounds": []string{"wg-out"},
+		"default":   "wg-out",
+	}
+
+	tunInbound := map[string]interface{}{
+		"type":       "tun",
+		"tag":        "tun-in",
+		"mtu":        cfg.MTU,
+		"address":    []string{cfg.VirtualIP + "/32"},
+		"stack":      "gvisor",
+		"auto_route": false,
+	}
+
+	configMap := map[string]interface{}{
+		"log": map[string]interface{}{
+			"level": "trace",
+		},
+		"endpoints": []interface{}{endpoint},
+		"inbounds":  []interface{}{tunInbound},
+		"outbounds": []interface{}{outbound},
+	}
+
+	fullCfgBytes, _ := json.Marshal(configMap)
 
 	var opts option.Options
-	if err := json.Unmarshal(jsonBytes, &opts); err != nil {
-		log.Printf("[vpn-go] Config unmarshal error: %v", err)
+	if err := json.Unmarshal(fullCfgBytes, &opts); err != nil {
+		log.Printf("[vpn-go] Config parse error: %v", err)
 		return -1
 	}
 
+	// 2. Initialize Box
 	b, err := box.New(box.Options{
+		Context: context.Background(),
 		Options: opts,
 	})
 	if err != nil {
@@ -78,14 +124,15 @@ func StartTunnel(tunFd C.int, configJSON *C.char) C.int {
 	}
 
 	instance = b
-	log.Printf("[vpn-go] Tunnel started: protocol=%s", cfg.Protocol)
+	log.Printf("[vpn-go] Tunnel started minimal")
 	return 0
 }
 
 //export StopTunnel
 func StopTunnel() {
-	mu.Lock()
-	defer mu.Unlock()
+	lock.Lock()
+	defer lock.Unlock()
+
 	if instance != nil {
 		instance.Close()
 		instance = nil
@@ -94,21 +141,21 @@ func StopTunnel() {
 }
 
 func buildConfigMap(tunFd int, cfg ConnectResponse) map[string]interface{} {
-	endpoint := cfg.PeerEndpoint
-	if endpoint == "" {
-		endpoint = cfg.ServerEndpoint
+	endpointAddr := cfg.PeerEndpoint
+	if endpointAddr == "" {
+		endpointAddr = cfg.ServerEndpoint
 	}
-	host, port, _ := splitAddr(endpoint)
+	host, port, _ := splitAddr(endpointAddr)
 
 	// Build Inbound
 	tunInbound := map[string]interface{}{
-		"type":          "tun",
-		"tag":           "tun-in",
-		"mtu":           cfg.MTU,
-		"inet4_address": []string{cfg.VirtualIP + "/32"},
-		"stack":         "gvisor",
-		"auto_route":    true,
-		"strict_route":  true,
+		"type":         "tun",
+		"tag":          "tun-in",
+		"mtu":          cfg.MTU,
+		"address":      []string{cfg.VirtualIP + "/32"},
+		"stack":        "gvisor",
+		"auto_route":   true,
+		"strict_route": true,
 	}
 
 	// On Android, use the provided File Descriptor
@@ -116,57 +163,89 @@ func buildConfigMap(tunFd int, cfg ConnectResponse) map[string]interface{} {
 		tunInbound["fd"] = tunFd
 	}
 
-	// Build Outbound
-	var outbound map[string]interface{}
+	var endpoints []interface{}
+	var outbounds []interface{}
+
+	// Build Outbound/Endpoint
 	switch cfg.Protocol {
 	case "WireGuard":
-		outbound = map[string]interface{}{
-			"type":          "wireguard",
-			"tag":           "proxy",
-			"server":        host,
-			"server_port":   port,
-			"local_address": []string{cfg.VirtualIP + "/32"},
-			"public_key":    cfg.PeerPublicKey,
-			"mtu":           cfg.MTU,
-		}
+		endpoints = append(endpoints, map[string]interface{}{
+			"type":        "wireguard",
+			"tag":         "wg-out",
+			"address":     []string{cfg.VirtualIP + "/32"},
+			"private_key": cfg.PrivateKey,
+			"peers": []interface{}{
+				map[string]interface{}{
+					"address":     host,
+					"port":        port,
+					"public_key":  cfg.PeerPublicKey,
+					"allowed_ips": []string{"0.0.0.0/0"},
+				},
+			},
+			"mtu": cfg.MTU,
+		})
+		outbounds = append(outbounds, map[string]interface{}{
+			"type":      "selector",
+			"tag":       "proxy",
+			"outbounds": []string{"wg-out"},
+			"default":   "wg-out",
+		})
 	case "Shadowsocks":
-		outbound = map[string]interface{}{
+		outbounds = append(outbounds, map[string]interface{}{
 			"type":        "shadowsocks",
 			"tag":         "proxy",
 			"server":      host,
 			"server_port": port,
 			"method":      "aes-256-gcm",
 			"password":    cfg.Password,
-		}
-	case "Hysteria2":
-		outbound = map[string]interface{}{
-			"type":        "hysteria2",
+		})
+	default:
+		// Fallback for others
+		outbounds = append(outbounds, map[string]interface{}{
+			"type":        "direct",
 			"tag":         "proxy",
-			"server":      host,
-			"server_port": port,
-			"password":    cfg.Password,
-		}
-	case "VLESS":
-		outbound = map[string]interface{}{
-			"type":        "vless",
-			"tag":         "proxy",
-			"server":      host,
-			"server_port": port,
-			"uuid":        cfg.UUID,
-		}
-	case "Trojan":
-		outbound = map[string]interface{}{
-			"type":        "trojan",
-			"tag":         "proxy",
-			"server":      host,
-			"server_port": port,
-			"password":    cfg.Password,
-		}
+		})
 	}
 
+	// Build DNS
+	dnsConfig := map[string]interface{}{
+		"servers": []interface{}{
+			map[string]interface{}{
+				"address": "1.1.1.1",
+				"tag":     "cloudflare",
+			},
+		},
+		"strategy": "prefer_ipv4",
+	}
+
+	// Build Route
+	routeConfig := map[string]interface{}{
+		"auto_detect_interface": true,
+		"rules": []interface{}{
+			map[string]interface{}{
+				"protocol": "dns",
+				"action":   "hijack-dns",
+			},
+			map[string]interface{}{
+				"inbound":  []string{"tun-in"},
+				"outbound": "proxy",
+			},
+		},
+	}
+
+	// Add DNS Outbound
+	dnsOutbound := map[string]interface{}{
+		"type": "dns",
+		"tag":  "dns-out",
+	}
+	outbounds = append(outbounds, dnsOutbound)
+
 	return map[string]interface{}{
+		"endpoints": endpoints,
 		"inbounds":  []interface{}{tunInbound},
-		"outbounds": []interface{}{outbound},
+		"outbounds": outbounds,
+		"dns":       dnsConfig,
+		"route":     routeConfig,
 	}
 }
 

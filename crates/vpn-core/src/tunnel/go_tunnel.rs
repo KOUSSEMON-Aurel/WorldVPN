@@ -42,20 +42,23 @@ impl VpnTunnel for GoTunnel {
         info!("Connecting Go tunnel: protocol={:?}, endpoint={}", config.protocol, config.server_addr);
 
         // Map credentials to Go terminology
-        let (password, peer_public_key, uuid) = match &config.credentials {
-            Credentials::Password { password, .. } => (Some(password.clone()), None::<String>, None::<String>),
-            Credentials::KeyPair { peer_public_key, .. } => (None::<String>, Some(hex::encode(peer_public_key)), None::<String>),
-            _ => (None::<String>, None::<String>, None::<String>), 
+        let (password, private_key, peer_public_key, uuid) = match &config.credentials {
+            Credentials::Password { password, .. } => (Some(password.clone()), None::<String>, None::<String>, None::<String>),
+            Credentials::KeyPair { private_key, peer_public_key } => (
+                None::<String>, 
+                Some(hex::encode(private_key)), 
+                Some(hex::encode(peer_public_key)), 
+                None::<String>
+            ),
+            _ => (None::<String>, None::<String>, None::<String>, None::<String>), 
         };
 
-        // For VLESS/Trojan, use password as UUID if appropriate, but here we expect structured data.
-        // In a real app, you'd have a more robust mapping.
-        
         let config_json = json!({
             "session_id": self.id,
             "protocol": format!("{:?}", config.protocol),
-            "assigned_ip": "10.0.0.2", // Mocked for now, usually comes from DHT/Identity
+            "assigned_ip": config.assigned_ip.to_string(),
             "peer_endpoint": config.server_addr.to_string(),
+            "private_key": private_key.unwrap_or_default(),
             "peer_public_key": peer_public_key.unwrap_or_default(),
             "password": password.unwrap_or_default(),
             "uuid": uuid.unwrap_or_default(),
@@ -66,7 +69,7 @@ impl VpnTunnel for GoTunnel {
         GoBridge::start_tunnel(0, &config_json).map_err(|e| VpnError::ConnectionFailed(e.to_string()))?;
 
         self.start_time = Some(Instant::now());
-        self.assigned_ip = Some("10.0.0.2".parse().unwrap());
+        self.assigned_ip = Some(config.assigned_ip);
 
         Ok(TunnelHandle {
             id: self.id.clone(),

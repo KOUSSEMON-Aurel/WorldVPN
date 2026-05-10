@@ -7,11 +7,15 @@ pub mod auth;
 pub mod credits;
 pub mod nodes;
 pub mod transparency;
+pub mod vpnbook;
 
 pub fn router(state: AppState) -> Router {
     Router::new()
         // Health check
         .route("/health", get(health::health_check))
+        
+        // VPNBook password
+        .route("/nodes/vpnbook/password", get(vpnbook::get_vpnbook_password))
         
         // Authentication
         .route("/auth/login", post(auth::login))

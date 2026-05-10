@@ -2,16 +2,24 @@ mod state;
 mod api;
 mod auth;
 mod services;
+mod metrics;
 
 use crate::state::AppState;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use tracing::info;
+use tower_governor::{governor::GovernorConfigBuilder, GovernorLayer};
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     // Initialize structured logging
     tracing_subscriber::fmt::init();
+
+    // Initialize anonymous Prometheus metrics
+    metrics::init_metrics();
+    tokio::spawn(async move {
+        metrics::start_metrics_server().await;
+    });
 
     info!("🚀 Starting WorldVPN server...");
 
@@ -47,14 +55,30 @@ async fn main() -> anyhow::Result<()> {
         services::pruning::start_pruning_service(pruning_pool).await;
     });
 
+    let vpnbook_pool = db_pool.clone();
+    tokio::spawn(async move {
+        services::vpnbook::start_vpnbook_sync(vpnbook_pool).await;
+    });
+
     // Liveness probe on startup
     sqlx::query("SELECT 1").execute(&db_pool).await.expect("DB Health check failed");
 
     // Initialize global application state
     let state = AppState::new(Some(db_pool));
 
-    // Register API routes
-    let app = api::router(state);
+    // Rate limiter: 10 requests per second per IP (replenish 1 token / 100ms)
+    // Guards against identity spam and brute-force on /auth/*
+    let governor_config = Arc::new(
+        GovernorConfigBuilder::default()
+            .per_millisecond(100)
+            .burst_size(10)
+            .finish()
+            .expect("Invalid rate limiter config"),
+    );
+    let governor_layer = GovernorLayer { config: governor_config };
+
+    // Register API routes with rate limiting middleware
+    let app = api::router(state).layer(governor_layer);
 
     let addr = SocketAddr::from(([0, 0, 0, 0], 3000));
 

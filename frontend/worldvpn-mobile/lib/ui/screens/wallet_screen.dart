@@ -3,16 +3,157 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:lucide_icons/lucide_icons.dart';
 import '../../store/wallet_provider.dart';
 
-class WalletScreen extends ConsumerWidget {
+// Definir une classe locale pour l'instant car le code Rust n'a pas encore été régénéré en Dart
+class LocalTransaction {
+  final String id;
+  final String txType;
+  final double amount;
+  final String date;
+  final String description;
+
+  const LocalTransaction({
+    required this.id,
+    required this.txType,
+    required this.amount,
+    required this.date,
+    required this.description,
+  });
+}
+
+class WalletScreen extends ConsumerStatefulWidget {
   const WalletScreen({super.key});
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  ConsumerState<WalletScreen> createState() => _WalletScreenState();
+}
+
+class _WalletScreenState extends ConsumerState<WalletScreen> {
+  List<LocalTransaction> _transactions = [];
+  bool _isLoading = true;
+
+  @override
+  void initState() {
+    super.initState();
+    _fetchTransactions();
+  }
+
+  Future<void> _fetchTransactions() async {
+    // Simulacre temporaire car getTransactions() n'est pas encore dans le bridge généré
+    // Mais le backend Rust est prêt dès que le bridge sera régénéré.
+    await Future.delayed(const Duration(milliseconds: 500));
+    if (mounted) {
+      setState(() {
+        _transactions = [
+          const LocalTransaction(
+            id: "1",
+            txType: "EARNED",
+            amount: 10.5,
+            date: "2026-05-01",
+            description: "P2P Sharing Reward",
+          ),
+        ];
+        _isLoading = false;
+      });
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
     final balance = ref.watch(walletBalanceProvider);
 
     return Scaffold(
-      backgroundColor: Colors.transparent,
-      body: SafeArea(
+      backgroundColor: const Color(0xFF0A0F1C),
+      body: CustomScrollView(
+        slivers: [
+          _buildSliverAppBar(context, balance),
+          SliverToBoxAdapter(
+            child: Padding(
+              padding: const EdgeInsets.all(24.0),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Text(
+                    "Recent Activity",
+                    style: TextStyle(
+                      fontSize: 18,
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
+                  const SizedBox(height: 16),
+                  if (_isLoading)
+                    const Center(child: CircularProgressIndicator())
+                  else if (_transactions.isEmpty)
+                    const Center(
+                      child: Padding(
+                        padding: EdgeInsets.symmetric(vertical: 40),
+                        child: Text("No recent transactions",
+                            style: TextStyle(color: Colors.grey)),
+                      ),
+                    )
+                  else
+                    ..._transactions.map((tx) => _buildTransactionItem(tx)),
+                ],
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildTransactionItem(LocalTransaction tx) {
+    final bool isEarned = tx.txType == "EARNED";
+    return Container(
+      margin: const EdgeInsets.only(bottom: 12),
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: Colors.white.withOpacity(0.05),
+        borderRadius: BorderRadius.circular(16),
+      ),
+      child: Row(
+        children: [
+          Container(
+            padding: const EdgeInsets.all(8),
+            decoration: BoxDecoration(
+              color: isEarned
+                  ? Colors.green.withOpacity(0.2)
+                  : Colors.red.withOpacity(0.2),
+              borderRadius: BorderRadius.circular(8),
+            ),
+            child: Icon(
+              isEarned ? LucideIcons.arrowDownLeft : LucideIcons.arrowUpRight,
+              color: isEarned ? Colors.green : Colors.red,
+              size: 20,
+            ),
+          ),
+          const SizedBox(width: 16),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(tx.description,
+                    style: const TextStyle(fontWeight: FontWeight.bold)),
+                Text(tx.date,
+                    style: const TextStyle(color: Colors.grey, fontSize: 12)),
+              ],
+            ),
+          ),
+          Text(
+            "${isEarned ? '+' : ''}${tx.amount} CR",
+            style: TextStyle(
+              fontWeight: FontWeight.bold,
+              color: isEarned ? Colors.green : Colors.white,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildSliverAppBar(BuildContext context, int balance) {
+    return SliverToBoxAdapter(
+      child: SafeArea(
+        bottom: false,
         child: Padding(
           padding: const EdgeInsets.all(24.0),
           child: Column(
@@ -21,7 +162,6 @@ class WalletScreen extends ConsumerWidget {
               const Text("My Wallet",
                   style: TextStyle(fontSize: 24, fontWeight: FontWeight.bold)),
               const SizedBox(height: 24),
-              // Balance Card
               Container(
                 width: double.infinity,
                 padding: const EdgeInsets.all(24),
@@ -40,7 +180,7 @@ class WalletScreen extends ConsumerWidget {
                       color: Theme.of(context)
                           .colorScheme
                           .primary
-                          .withValues(alpha: 0.3),
+                          .withOpacity(0.3),
                       blurRadius: 20,
                       offset: const Offset(0, 10),
                     ),
@@ -65,106 +205,12 @@ class WalletScreen extends ConsumerWidget {
                                 fontFamily: 'monospace')),
                       ],
                     ),
-                    const SizedBox(height: 24),
-                    ElevatedButton(
-                      onPressed: () {},
-                      style: ElevatedButton.styleFrom(
-                        backgroundColor: Colors.white,
-                        foregroundColor: Colors.black,
-                        shape: RoundedRectangleBorder(
-                            borderRadius: BorderRadius.circular(12)),
-                      ),
-                      child: const Text("Top Up Credits",
-                          style: TextStyle(fontWeight: FontWeight.bold)),
-                    ),
-                  ],
-                ),
-              ),
-              const SizedBox(height: 32),
-              const Text("Recent Transactions",
-                  style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
-              const SizedBox(height: 16),
-              Expanded(
-                child: ListView(
-                  children: [
-                    _buildTransactionItem(
-                        "Node Connection (JP-Tokyo)",
-                        "- 5 CR",
-                        DateTime.now().subtract(const Duration(minutes: 45))),
-                    _buildTransactionItem(
-                        "Node Connection (US-East)",
-                        "- 12 CR",
-                        DateTime.now().subtract(const Duration(hours: 4))),
-                    _buildTransactionItem("Top Up", "+ 500 CR",
-                        DateTime.now().subtract(const Duration(days: 1)),
-                        isCredit: true),
                   ],
                 ),
               ),
             ],
           ),
         ),
-      ),
-    );
-  }
-
-  Widget _buildTransactionItem(String title, String amount, DateTime date,
-      {bool isCredit = false}) {
-    return Container(
-      margin: const EdgeInsets.only(bottom: 12),
-      padding: const EdgeInsets.all(16),
-      decoration: BoxDecoration(
-        color: Colors.white.withValues(alpha: 0.05),
-        borderRadius: BorderRadius.circular(16),
-      ),
-      child: Row(
-        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-        children: [
-          Expanded(
-            child: Row(
-              children: [
-                Container(
-                  padding: const EdgeInsets.all(10),
-                  decoration: BoxDecoration(
-                    color: isCredit
-                        ? Colors.green.withValues(alpha: 0.2)
-                        : Colors.red.withValues(alpha: 0.2),
-                    shape: BoxShape.circle,
-                  ),
-                  child: Icon(
-                    isCredit ? LucideIcons.arrowDown : LucideIcons.arrowUp,
-                    color: isCredit ? Colors.green : Colors.red,
-                    size: 16,
-                  ),
-                ),
-                const SizedBox(width: 16),
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(title,
-                          style: const TextStyle(fontWeight: FontWeight.bold),
-                          overflow: TextOverflow.ellipsis),
-                      Text(
-                        "${date.day}/${date.month} ${date.hour}:${date.minute.toString().padLeft(2, '0')}",
-                        style:
-                            const TextStyle(color: Colors.grey, fontSize: 12),
-                      ),
-                    ],
-                  ),
-                ),
-              ],
-            ),
-          ),
-          Text(
-            amount,
-            style: TextStyle(
-              color: isCredit ? Colors.green : Colors.white,
-              fontWeight: FontWeight.bold,
-              fontFamily: 'monospace',
-            ),
-          ),
-        ],
       ),
     );
   }

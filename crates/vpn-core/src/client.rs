@@ -16,8 +16,8 @@ pub struct VpnApiClient {
 #[derive(Serialize)]
 struct ConnectRequest {
     protocol: VpnProtocol,
-    public_key: Option<String>,
-    preferred_country: Option<String>,
+    username: String,
+    country_code: Option<String>,
 }
 
 #[derive(Deserialize, Debug)]
@@ -53,6 +53,10 @@ impl VpnApiClient {
         }
     }
 
+    pub fn base_url(&self) -> &str {
+        &self.base_url
+    }
+
     /// Login anonyme (V2) via clé publique Ed25519 et signature (Proof of Work/Identity)
     pub async fn login_with_identity(&self, public_key: String, signature: String, timestamp: String) -> Result<LoginResponse> {
         let url = format!("{}/auth/identity", self.base_url);
@@ -75,10 +79,11 @@ impl VpnApiClient {
             return Err(VpnError::ConnectionFailed(format!("Login échoué: {}", error_text)));
         }
 
-        let login_info = response
-            .json::<LoginResponse>()
-            .await
-            .map_err(|e| VpnError::Internal(format!("Invalid login response: {}", e)))?;
+        let raw_text = response.text().await.unwrap_or_else(|_| "".to_string());
+        
+        let login_info: LoginResponse = serde_json::from_str(&raw_text).map_err(|e| {
+            VpnError::Internal(format!("Invalid login response: error decoding body. Raw text: '{}', Error: {}", raw_text, e))
+        })?;
 
         Ok(login_info)
     }
@@ -87,16 +92,16 @@ impl VpnApiClient {
     pub async fn connect(
         &self,
         protocol: VpnProtocol,
-        public_key: Option<String>,
-        preferred_country: Option<String>,
+        username: String,
+        country_code: Option<String>,
         token: &str,
     ) -> Result<ConnectionInfo> {
         let url = format!("{}/vpn/connect", self.base_url);
         
         let payload = ConnectRequest {
             protocol,
-            public_key: public_key.clone(),
-            preferred_country,
+            username,
+            country_code,
         };
 
         let response = self.client
@@ -109,7 +114,9 @@ impl VpnApiClient {
 
 
         if !response.status().is_success() {
-            return Err(VpnError::ConnectionFailed(format!("API Error: {}", response.status())));
+            let status = response.status();
+            let error_text = response.text().await.unwrap_or_else(|_| "Unknown error".to_string());
+            return Err(VpnError::ConnectionFailed(format!("API Error: {} - {}", status, error_text)));
         }
 
         let info = response
@@ -272,5 +279,34 @@ impl VpnApiClient {
         
         Ok(data)
     }
+
+    pub async fn fetch_transactions(&self, token: &str) -> Result<Vec<Transaction>> {
+        let url = format!("{}/credits/transactions", self.base_url);
+        let resp = self.client
+            .get(&url)
+            .header("Authorization", format!("Bearer {}", token))
+            .send()
+            .await
+            .map_err(|e| VpnError::ConnectionFailed(format!("Transactions fetch failed: {}", e)))?;
+
+        if !resp.status().is_success() {
+            return Ok(vec![]);
+        }
+
+        let txs = resp
+            .json::<Vec<Transaction>>()
+            .await
+            .map_err(|e| VpnError::Internal(format!("Invalid transactions response: {}", e)))?;
+        Ok(txs)
+    }
+}
+
+#[derive(Deserialize, Serialize, Debug)]
+pub struct Transaction {
+    pub id: String,
+    pub tx_type: String, // "EARNED" | "SPENT"
+    pub amount: f64,
+    pub date: String,
+    pub description: String,
 }
 

@@ -151,7 +151,7 @@ pub fn start_vpn_matchmaking(protocol_str: String, country_code: String, node_gr
         let client = VpnApiClient::new(get_backend_url());
         let mut conn_info = client.connect(
             chosen_protocol, 
-            Some(username.clone()), 
+            username.clone(), 
             Some(country_code), 
             &token
         ).await?;
@@ -188,6 +188,7 @@ pub fn start_vpn_matchmaking(protocol_str: String, country_code: String, node_gr
             let _config = crate::tunnel::ConnectionConfig {
                 protocol: chosen_protocol,
                 server_addr: conn_info.server_endpoint.parse()?,
+                assigned_ip: conn_info.assigned_ip.parse()?,
                 credentials: crate::tunnel::Credentials::Password { 
                     username: Some(username), 
                     password: "".to_string() // Password mapping depends on protocol
@@ -335,6 +336,19 @@ pub fn get_wallet_balance() -> anyhow::Result<i64> {
             Ok(client.fetch_balance(&token).await.unwrap_or(0))
         } else {
             Ok(0)
+        }
+    })
+}
+
+pub fn get_transactions() -> anyhow::Result<Vec<crate::client::Transaction>> {
+    let rt = tokio::runtime::Runtime::new()?;
+    rt.block_on(async {
+        let token_opt = AUTH_TOKEN.lock().unwrap().clone();
+        if let Some(token) = token_opt {
+            let client = VpnApiClient::new(get_backend_url());
+            client.fetch_transactions(&token).await.map_err(|e| anyhow::anyhow!(e.to_string()))
+        } else {
+            Ok(vec![])
         }
     })
 }

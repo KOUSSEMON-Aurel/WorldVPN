@@ -1,0 +1,21 @@
+[[permission]]
+identifier = "allow-all-commands"
+description = "Allows all custom commands for WorldVPN"
+commands.allow = [
+    "generate_identity",
+    "import_identity",
+    "is_identity_saved",
+    "login_anonymously_desktop",
+    "migrate_credits_desktop",
+    "connect_vpn",
+    "disconnect_vpn",
+    "get_vpn_status",
+    "get_vpn_metrics",
+    "start_sharing",
+    "stop_sharing",
+    "get_p2p_status",
+    "get_nodes",
+    "get_sessions",
+    "get_wallet_balance_desktop",
+    "get_transactions"
+]

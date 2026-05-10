@@ -2,10 +2,17 @@ import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:shared_preferences/shared_preferences.dart';
+import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'ui/router.dart';
 import 'rust_gen/frb_generated.dart';
 import 'rust_gen/api/simple.dart' as rust;
+
+/// Secure storage instance for sensitive identity data (backed by
+/// Android Keystore / iOS Keychain — NOT SharedPreferences).
+const _secureStorage = FlutterSecureStorage(
+  aOptions: AndroidOptions(encryptedSharedPreferences: true),
+  iOptions: IOSOptions(accessibility: KeychainAccessibility.first_unlock),
+);
 
 void main() async {
   // Ensure Flutter binding is initialized before async calls
@@ -17,11 +24,13 @@ void main() async {
     debugPrint("✅ Rust Library initialized");
 
     // Configurer l'URL du backend de production
-    await rust.setBackendUrl(url: "https://worldvpn-backend.onrender.com");
-    debugPrint("🌐 Backend URL set to production");
+    const backendUrl = String.fromEnvironment('WORLDVPN_API_URL',
+        defaultValue: 'https://worldvpn-backend.onrender.com');
+    await rust.setBackendUrl(url: backendUrl);
+    debugPrint("🌐 Backend URL set to $backendUrl");
 
-    // Auto-login silencieux: génère ou restaure l'identité
-    _silentLogin();
+    // Auto-login silencieux: génère ou restaure l'identité (bloquant)
+    await _silentLogin();
   } catch (e, stack) {
     debugPrint("❌ CRITICAL: Rust Initialization failed: $e");
     debugPrint(stack.toString());
@@ -31,20 +40,26 @@ void main() async {
 }
 
 /// Génère une nouvelle identité (si inexistante) et s'authentifie silencieusement.
+/// La clé privée est stockée dans le Keystore/Keychain OS via [FlutterSecureStorage].
 /// Non-bloquant — les erreurs sont loguées uniquement.
 Future<void> _silentLogin() async {
   try {
-    final prefs = await SharedPreferences.getInstance();
     List<int> privateKeyBytes;
 
-    final keyBase64 = prefs.getString('identity_key');
+    // Read from secure OS-level storage (Keychain / Keystore)
+    final keyBase64 = await _secureStorage.read(key: 'identity_key');
+
     if (keyBase64 == null) {
       privateKeyBytes = await rust.generateIdentity();
-      await prefs.setString('identity_key', base64Encode(privateKeyBytes));
-      debugPrint("🔑 New identity generated");
+      // Write to secure storage — encrypted at rest by the OS
+      await _secureStorage.write(
+        key: 'identity_key',
+        value: base64Encode(privateKeyBytes),
+      );
+      debugPrint("🔑 New identity generated and stored securely");
     } else {
       privateKeyBytes = base64Decode(keyBase64);
-      debugPrint("🔑 Identity restored from storage");
+      debugPrint("🔑 Identity restored from secure storage");
     }
 
     await rust.loginAnonymously(privateKeyBytes: privateKeyBytes);

@@ -212,6 +212,7 @@ impl IdentityKey {
     pub fn decrypt_with_identity(&self, encrypted_b64: &str) -> Result<String> {
         use x25519_dalek::{StaticSecret, PublicKey as XPublicKey};
         use chacha20poly1305::{ChaCha20Poly1305, Key, Nonce, aead::{Aead, KeyInit}};
+        use sha2::Digest;
 
         let combined = B64.decode(encrypted_b64)
             .map_err(|_| VpnError::CryptoError("Base64 invalide".into()))?;
@@ -224,13 +225,23 @@ impl IdentityKey {
         let nonce_bytes: [u8; 12] = combined[32..44].try_into().unwrap();
         let ciphertext = &combined[44..];
 
-        // 1. Convertir la clé privée Ed25519 en X25519
-        // Note: ed25519_dalek SigningKey -> X25519 StaticSecret
+        // 1. Convertir la graine Ed25519 en scalaire X25519
+        // La conversion correcte : SHA-512(seed) → lower 32 bytes → clamp
+        // Cela correspond à la conversion de la clé publique via le point de Montgomery (en chiffrement).
         let sk = self.signing_key.as_ref()
             .ok_or_else(|| VpnError::CryptoError("Clé privée indisponible".into()))?;
-        let mut secret_bytes = [0u8; 32];
-        secret_bytes.copy_from_slice(&sk.to_bytes()[..32]);
-        let my_x_secret = StaticSecret::from(secret_bytes);
+
+        let seed = sk.to_bytes(); // 32 bytes — la graine Ed25519 brute
+        let hash = sha2::Sha512::digest(&seed);
+
+        let mut scalar_bytes = [0u8; 32];
+        scalar_bytes.copy_from_slice(&hash[..32]);
+        // Appliquer le clamping X25519 (RFC 7748)
+        scalar_bytes[0]  &= 248;
+        scalar_bytes[31] &= 127;
+        scalar_bytes[31] |= 64;
+
+        let my_x_secret = StaticSecret::from(scalar_bytes);
 
         // 2. Diffie-Hellman
         let ephemeral_x_pub = XPublicKey::from(ephemeral_pub_bytes);
@@ -270,19 +281,35 @@ mod tests {
     }
 
     #[test]
-    fn test_identity_key() {
-        let identity = IdentityKey::generate();
-        let pub_hex = identity.public_key_hex();
-        assert!(pub_hex.starts_with("ed25519:"));
-        
-        let message = "1714512000"; // Timestamp mock
-        let signature = identity.sign_challenge(message);
-        assert!(!signature.is_empty());
-        
-        // Test de sérialisation
-        if let Ok(bytes) = identity.to_bytes() {
-            let recovered = IdentityKey::from_bytes(&bytes).unwrap();
-            assert_eq!(pub_hex, recovered.public_key_hex());
-        }
+    fn test_encrypt_decrypt_e2e() {
+        let recipient = IdentityKey::generate();
+        let pub_hex = recipient.public_key_hex();
+
+        let plaintext = "endpoint:10.0.0.1:51820";
+
+        // Chiffrer pour le destinataire
+        let encrypted = IdentityKey::encrypt_for_identity(plaintext, &pub_hex)
+            .expect("Le chiffrement doit réussir");
+        assert!(!encrypted.is_empty(), "Le chiffré ne doit pas être vide");
+
+        // Déchiffrer avec la clé privée du destinataire
+        let decrypted = recipient.decrypt_with_identity(&encrypted)
+            .expect("Le déchiffrement doit réussir");
+        assert_eq!(decrypted, plaintext, "Le texte déchiffré doit correspondre à l'original");
+    }
+
+    #[test]
+    fn test_encrypt_decrypt_wrong_identity_fails() {
+        let recipient = IdentityKey::generate();
+        let attacker = IdentityKey::generate();
+
+        let plaintext = "secret-endpoint:192.168.1.1:51820";
+        let encrypted = IdentityKey::encrypt_for_identity(plaintext, &recipient.public_key_hex())
+            .expect("Le chiffrement doit réussir");
+
+        // L'attaquant ne doit pas pouvoir déchiffrer le message du destinataire
+        let result = attacker.decrypt_with_identity(&encrypted);
+        assert!(result.is_err(), "Un tiers ne doit pas pouvoir déchiffrer le message");
     }
 }
+

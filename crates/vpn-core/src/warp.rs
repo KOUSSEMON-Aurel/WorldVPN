@@ -15,6 +15,7 @@ pub struct WarpConfig {
     pub token: String,
     pub private_key: String,
     pub public_key: String,
+    pub peer_public_key: String,
     pub endpoint: String,
 }
 
@@ -101,10 +102,12 @@ pub async fn register_warp_device() -> Result<WarpConfig> {
     let data: RegisterResponse = resp.json().await
         .map_err(|e| VpnError::ProtocolError(format!("Invalid WARP response: {}", e)))?;
 
-    // 4. Extract endpoint
-    let endpoint = data.config.peers.first()
-        .map(|p| p.endpoint.v4.clone())
-        .unwrap_or_else(|| "162.159.193.1:2408".to_string());
+    // 4. Extract endpoint & peer key
+    let peer = data.config.peers.first()
+        .ok_or_else(|| VpnError::ProtocolError("No peers returned from WARP API".into()))?;
+    
+    let endpoint = peer.endpoint.v4.clone();
+    let peer_public_key = peer.public_key.clone();
 
     tracing::info!("WARP Device Registered Successfully: {}", data.id);
 
@@ -113,6 +116,7 @@ pub async fn register_warp_device() -> Result<WarpConfig> {
         token: data.token,
         private_key: private_b64,
         public_key: public_b64,
+        peer_public_key,
         endpoint,
     })
 }

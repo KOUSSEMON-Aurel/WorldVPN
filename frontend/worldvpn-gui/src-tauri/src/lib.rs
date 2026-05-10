@@ -1,15 +1,21 @@
 use std::sync::{Arc, Mutex};
+use base64::prelude::*;
 use tauri::State;
 use serde::{Serialize, Deserialize};
 use vpn_core::{
     crypto::IdentityKey,
     client::VpnApiClient,
     p2p::PeerDiscovery,
-    error::VpnError,
 };
 use tokio::sync::OnceCell;
-use vpn_core::tunnel::{VpnTunnel, GoTunnel, ConnectionConfig, Credentials};
-use std::net::SocketAddr;
+use tauri::Manager;
+use std::path::PathBuf;
+use std::fs;
+
+use vpn_core::fallback::FallbackManager;
+mod tunnel;
+mod config;
+use tunnel::TunnelState;
 
 // Shared state to track VPN status across the app
 struct AppState {
@@ -17,7 +23,7 @@ struct AppState {
     is_sharing: Mutex<bool>,
     p2p: OnceCell<Arc<PeerDiscovery>>,
     api_client: VpnApiClient,
-    active_tunnel: Mutex<Option<Box<dyn VpnTunnel + Send>>>,
+    pub public_nodes_cache: Mutex<Option<(Vec<vpn_core::nodes::VpnNode>, std::time::Instant)>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -41,6 +47,7 @@ pub struct P2pStats {
 struct VpnStatus {
     state: ConnectionState,
     current_ip: Option<String>,
+    country: Option<String>,
     protocol: Option<String>,
     bytes_up: u64,
     bytes_down: u64,
@@ -53,6 +60,7 @@ impl Default for VpnStatus {
         Self {
             state: ConnectionState::Disconnected,
             current_ip: None,
+            country: None,
             protocol: None,
             bytes_up: 0,
             bytes_down: 0,
@@ -62,34 +70,86 @@ impl Default for VpnStatus {
     }
 }
 
+fn get_identity_path(app_handle: &tauri::AppHandle) -> Result<PathBuf, String> {
+    let mut dir = app_handle.path().app_data_dir()
+        .map_err(|e| format!("Failed to get app data dir: {}", e))?;
+    fs::create_dir_all(&dir).ok();
+    dir.push("identity.dat");
+    Ok(dir)
+}
+
+fn save_identity(app_handle: &tauri::AppHandle, private_key: &[u8]) -> Result<(), String> {
+    let path = get_identity_path(app_handle)?;
+    fs::write(path, private_key).map_err(|e| format!("Failed to save identity: {}", e))
+}
+
+fn load_identity(app_handle: &tauri::AppHandle) -> Result<Vec<u8>, String> {
+    let path = get_identity_path(app_handle)?;
+    fs::read(path).map_err(|e| format!("Failed to load identity: {}", e))
+}
+
 #[tauri::command]
-async fn generate_identity() -> Result<serde_json::Value, String> {
+async fn generate_identity(app_handle: tauri::AppHandle) -> Result<serde_json::Value, String> {
+    println!("Generating new identity...");
     let identity = IdentityKey::generate();
     let pub_key = identity.public_key_hex();
     let priv_bytes = identity.to_bytes().map_err(|e| e.to_string())?;
+    println!("Identity generated: {}", pub_key);
+    
+    save_identity(&app_handle, &priv_bytes)?;
     
     Ok(serde_json::json!({
         "public_key": pub_key,
-        "private_key": priv_bytes.to_vec(),
     }))
 }
 
 #[tauri::command]
-async fn login_anonymously_desktop(
+async fn import_identity(
     private_key: Vec<u8>,
+    app_handle: tauri::AppHandle,
     state: State<'_, AppState>
 ) -> Result<serde_json::Value, String> {
-    let identity = IdentityKey::from_bytes(&private_key).map_err(|e| e.to_string())?;
+    let _identity = IdentityKey::from_bytes(&private_key).map_err(|e| e.to_string())?;
+    save_identity(&app_handle, &private_key)?;
+    login_anonymously_desktop(app_handle, state).await
+}
+
+#[tauri::command]
+async fn is_identity_saved(app_handle: tauri::AppHandle) -> Result<bool, String> {
+    let path = get_identity_path(&app_handle)?;
+    Ok(path.exists())
+}
+
+#[tauri::command]
+async fn login_anonymously_desktop(
+    app_handle: tauri::AppHandle,
+    state: State<'_, AppState>
+) -> Result<serde_json::Value, String> {
+    let private_key = load_identity(&app_handle)?;
+    println!("login_anonymously_desktop called with {} saved bytes", private_key.len());
+    
+    let identity = IdentityKey::from_bytes(&private_key).map_err(|e| {
+        println!("Failed to parse identity key bytes: {}", e);
+        e.to_string()
+    })?;
+    
+    println!("Logging in as: {}", identity.public_key_hex());
     
     // Handshake V2 : Signature du timestamp actuel
     let timestamp = chrono::Utc::now().timestamp().to_string();
     let signature = identity.sign_challenge(&timestamp);
     
+    println!("Sending handshake to backend...");
     let response = state.api_client.login_with_identity(
         identity.public_key_hex(),
         signature,
         timestamp
-    ).await.map_err(|e| e.to_string())?;
+    ).await.map_err(|e| {
+        println!("Backend login failure: {}", e);
+        e.to_string()
+    })?;
+    
+    println!("Login successful for user: {}", response.username);
     
     Ok(serde_json::json!({
         "token": response.token,
@@ -117,14 +177,15 @@ async fn migrate_credits_desktop(
 
 #[tauri::command]
 async fn connect_vpn(
+    state: State<'_, AppState>,
+    app_handle: tauri::AppHandle,
     protocol: String,
     country: String,
     token: String,
-    private_key: Vec<u8>,
-    state: State<'_, AppState>,
-    #[allow(unused_variables)]
-    app_handle: tauri::AppHandle,
+    ovpn_config: Option<String>,
+    ss_metadata: Option<String>,
 ) -> Result<VpnStatus, String> {
+    let private_key = load_identity(&app_handle)?;
     let identity = IdentityKey::from_bytes(&private_key).map_err(|e| e.to_string())?;
     
     // 1. Update state to Connecting
@@ -134,93 +195,234 @@ async fn connect_vpn(
     }
 
     // 2. Perform matchmaking and connect
-    let proto = match protocol.as_str() {
+    let mut chosen_proto = match protocol.as_str() {
         "WireGuard" => vpn_core::protocol::VpnProtocol::WireGuard,
         "Hysteria 2" => vpn_core::protocol::VpnProtocol::Hysteria2,
         "Shadowsocks" => vpn_core::protocol::VpnProtocol::Shadowsocks,
         "Trojan" => vpn_core::protocol::VpnProtocol::Trojan,
         "VLESS" => vpn_core::protocol::VpnProtocol::VLESS,
+        "OpenVPN" => vpn_core::protocol::VpnProtocol::OpenVPN,
         _ => vpn_core::protocol::VpnProtocol::WireGuard,
     };
 
-    let mut info = state.api_client.connect(
-        proto,
-        Some(identity.public_key_hex()),
-        Some(country),
+    let info = state.api_client.connect(
+        chosen_proto,
+        identity.public_key_hex(),
+        Some(country.clone()),
         &token
     ).await.map_err(|e| e.to_string())?;
     
-    // Phase 4 : Déchiffrement E2E automatique si nécessaire
-    if info.server_endpoint.starts_with("e2e:") {
-        let encrypted = &info.server_endpoint[4..];
+    let mut final_endpoint = info.server_endpoint.clone();
+    let mut final_assigned_ip = info.assigned_ip.clone();
+    let mut final_private_key = private_key.to_vec();
+    let mut final_peer_pub_raw = info.server_public_key.clone().unwrap_or_default();
+    let mut final_ovpn_content = String::new();
+    let mut final_peer_pub = if chosen_proto == vpn_core::protocol::VpnProtocol::WireGuard {
+        if final_peer_pub_raw == "ServerPublicKey_BASE64_PLACEHOLDER" {
+             // Force fallback because backend sent a mock key
+             final_endpoint = "error.worldvpn.net:0".to_string();
+             vec![]
+        } else {
+            info.server_public_key.as_ref()
+                .and_then(|k| hex::decode(k).ok())
+                .unwrap_or_default()
+        }
+    } else {
+        vec![] // Not a byte key for other protocols
+    };
+
+    // Tier 1.5: If direct metadata was provided (from map selection), use it immediately
+    if let Some(config) = ovpn_config {
+        println!("Using direct OVPN config provided by frontend");
+        final_ovpn_content = config;
+        chosen_proto = vpn_core::protocol::VpnProtocol::OpenVPN;
+        // The endpoint is usually inside OVPN, but we need something for the sidecar
+        // often we can extract it or just use a dummy if start_tunnel doesn't use it for OVPN
+    } else if let Some(meta) = ss_metadata {
+        println!("Using direct Shadowsocks metadata provided by frontend");
+        final_peer_pub_raw = meta; // For Shadowsocks, we store "method:password" here
+        chosen_proto = vpn_core::protocol::VpnProtocol::Shadowsocks;
+    }
+    
+    // Tier 2: Automatic Fallback to Cloudflare WARP if P2P fails
+    if final_endpoint.starts_with("error.worldvpn.net") {
+        println!("No P2P nodes available, triggering Public Gate Fallback...");
+        
+        let fallback_manager = FallbackManager::new(); 
+        let backend_url = state.api_client.base_url();
+        match fallback_manager.get_fallback_config(&country, Some(backend_url)).await {
+            Ok(fallback) => {
+                println!("Public Gate Fallback obtained: {:?} at {}", fallback.provider, fallback.server_ip);
+                final_endpoint = format!("{}:{}", fallback.server_ip, fallback.port);
+                chosen_proto = fallback.protocol;
+                final_assigned_ip = fallback.assigned_ip;
+                let _final_country = country.clone(); // Keep track of country even after fallback
+                
+                if let Some(ref priv_key_b64) = fallback.private_key {
+                    use base64::{Engine as _, engine::general_purpose};
+                    if let Ok(bytes) = general_purpose::STANDARD.decode(priv_key_b64) {
+                        final_private_key = bytes;
+                    }
+                }
+                
+                if let Some(ref pub_key_b64) = fallback.peer_public_key {
+                    final_peer_pub_raw = pub_key_b64.clone();
+                    use base64::{Engine as _, engine::general_purpose};
+                    if let Ok(bytes) = general_purpose::STANDARD.decode(pub_key_b64) {
+                        final_peer_pub = bytes;
+                    }
+                } else if chosen_proto == vpn_core::protocol::VpnProtocol::Shadowsocks {
+                    // Default for public VPNGate nodes if not specified by API
+                    final_peer_pub_raw = "chacha20-ietf-poly1305:m".to_string();
+                }
+
+                // Capture OpenVPN config if present in fallback/public node metadata
+                if let Some(config) = fallback.raw_config {
+                    final_ovpn_content = config;
+                }
+            },
+            Err(e) => return Err(format!("Total network failure: Both P2P and Fallback failed. {}", e)),
+        }
+    }
+    
+    // Phase 4: E2E Decryption
+    if final_endpoint.starts_with("e2e:") {
+        let encrypted = &final_endpoint[4..];
         match identity.decrypt_with_identity(encrypted) {
-            Ok(decrypted) => info.server_endpoint = decrypted,
+            Ok(decrypted) => final_endpoint = decrypted,
             Err(e) => return Err(format!("Échec déchiffrement endpoint: {}", e)),
         }
     }
 
-    // 3. Establish Tunnel
-    let server_addr: SocketAddr = info.server_endpoint.parse().map_err(|e| format!("Invalid endpoint: {}", e))?;
-    let credentials = Credentials::Password { 
-        username: Some(identity.public_key_hex()), 
-        password: "p2p-session-key".to_string() 
-    };
-
-    let config = ConnectionConfig {
-        protocol: proto,
-        server_addr,
-        credentials,
-        timeout: std::time::Duration::from_secs(10),
-    };
-
-    let mut tunnel: Box<dyn VpnTunnel + Send> = Box::new(GoTunnel::new(info.session_id.clone(), proto));
-
-    match tunnel.connect(&config).await {
-        Ok(handle) => {
-            // Save active tunnel
-            {
-                let mut active = state.active_tunnel.lock().unwrap();
-                *active = Some(tunnel);
-            }
-
-            // Update status
-            let mut status = state.vpn_status.lock().unwrap();
-            status.state = ConnectionState::Connected;
-            status.current_ip = Some(handle.assigned_ip.to_string());
-            status.protocol = Some(protocol);
-            status.connected_since = Some(chrono::Utc::now().timestamp());
-            Ok(status.clone())
-        },
-        Err(e) => {
-            let e: VpnError = e;
-            let err_msg = e.to_string();
-            let mut status = state.vpn_status.lock().unwrap();
-            status.state = ConnectionState::Error(err_msg.clone());
-            Err(err_msg)
-        }
+    if !final_endpoint.contains(':') {
+        final_endpoint = format!("{}:51820", final_endpoint);
+    } else if final_endpoint.ends_with(":0") {
+        final_endpoint = format!("{}2408", &final_endpoint[..final_endpoint.len()-1]);
     }
+
+    // 3. Establish Tunnel Settings
+    let mut addrs = tokio::net::lookup_host(&final_endpoint).await
+        .map_err(|e| format!("Invalid endpoint or DNS failure ({}): {}", final_endpoint, e))?;
+    let server_addr = addrs.next()
+        .ok_or_else(|| format!("Could not resolve endpoint: {}", final_endpoint))?;
+    println!("Connecting to endpoint: {} (Port: {})", server_addr.ip(), server_addr.port());
+
+    if chosen_proto == vpn_core::protocol::VpnProtocol::OpenVPN {
+        // Special Path for OpenVPN: Write .ovpn file
+        let mut config_path = app_handle.path().app_data_dir().map_err(|e| e.to_string())?;
+        config_path.push("config.ovpn");
+
+        let ovpn_content = final_ovpn_content;
+
+        // The config from VPNGate is Base64
+        let decoded_config = if ovpn_content.len() > 100 {
+             use base64::{Engine as _, engine::general_purpose};
+             general_purpose::STANDARD.decode(ovpn_content.trim())
+                .map(|b| String::from_utf8_lossy(&b).to_string())
+                .unwrap_or(ovpn_content)
+        } else {
+            ovpn_content
+        };
+
+        // Create a credentials file for VPNGate (uses vpn:vpn)
+        let mut creds_path = app_handle.path().app_data_dir().map_err(|e| e.to_string())?;
+        creds_path.push("creds.txt");
+        let _ = fs::write(&creds_path, "vpn\nvpn\n"); // Standard username/password
+
+        // Strip existing conflicting lines and rebuild config cleanly
+        let mut new_config: Vec<String> = decoded_config
+            .lines()
+            .filter(|l| {
+                let trimmed = l.trim();
+                !trimmed.starts_with("auth-user-pass")
+                    && !trimmed.starts_with("data-ciphers")
+            })
+            .map(|s| s.to_string())
+            .collect();
+
+        // Inject correct credentials path
+        new_config.push(format!("auth-user-pass {}", creds_path.to_string_lossy()));
+
+        // Inject modern and legacy ciphers & fallback to prevent negotiation crashes
+        new_config.push("data-ciphers DEFAULT:AES-128-GCM:AES-256-GCM:AES-128-CBC:AES-256-CBC:CHACHA20-POLY1305".to_string());
+        new_config.push("data-ciphers-fallback AES-128-CBC".to_string());
+
+        let final_config = new_config.join("\n");
+
+        fs::write(&config_path, &final_config).map_err(|e| e.to_string())?;
+        println!("OpenVPN config written to: {:?}", config_path);
+
+        let tunnel_state: State<'_, TunnelState> = app_handle.state();
+        tunnel::start_tunnel(app_handle.clone(), tunnel_state, config_path.to_string_lossy().to_string(), "OpenVPN".to_string())
+            .await
+            .map_err(|e| e.to_string())?;
+    } else {
+        // Standard Sing-box Path
+        let priv_key_32 = if final_private_key.len() >= 32 { &final_private_key[..32] } else { &final_private_key };
+        let priv_key_b64 = BASE64_STANDARD.encode(priv_key_32);
+
+        let pub_key_32 = if final_peer_pub.len() >= 32 { &final_peer_pub[..32] } else { &final_peer_pub };
+        let _pub_key_b64 = BASE64_STANDARD.encode(pub_key_32);
+
+        let proto_name = format!("{:?}", chosen_proto);
+        println!("Building sing-box config for protocol: {}", proto_name);
+        let sb_config = config::build_sing_box_config(
+            &proto_name,
+            server_addr,
+            &final_assigned_ip,
+            &priv_key_b64,
+            &final_peer_pub_raw,
+            1280
+        );
+
+        let mut config_path = app_handle.path().app_data_dir().map_err(|e| e.to_string())?;
+        fs::create_dir_all(&config_path).ok();
+        config_path.push("sing-box-config.json");
+        
+        let config_json = serde_json::to_string_pretty(&sb_config).map_err(|e| e.to_string())?;
+        fs::write(&config_path, &config_json)
+            .map_err(|e| format!("Failed to write config: {}", e))?;
+        
+        println!("Sing-box config written to: {:?}", config_path);
+
+        // 5. Start Tunnel Sidecar
+        println!("Spawning sing-box sidecar...");
+        let tunnel_state: State<'_, TunnelState> = app_handle.state();
+        tunnel::start_tunnel(app_handle.clone(), tunnel_state, config_path.to_string_lossy().to_string(), proto_name)
+            .await
+            .map_err(|e| e.to_string())?;
+    }
+
+    println!("VPN Tunnel Started successfully.");
+    let status = {
+        let mut status = state.vpn_status.lock().map_err(|_| "VPN status lock poisoned")?;
+        status.state = ConnectionState::Connected;
+        status.current_ip = Some(final_assigned_ip);
+        status.country = Some(country);
+        status.protocol = Some(protocol);
+        status.connected_since = Some(chrono::Utc::now().timestamp());
+        status.clone()
+    };
+    Ok(status)
 }
 
 #[tauri::command]
-async fn disconnect_vpn(state: State<'_, AppState>) -> Result<VpnStatus, String> {
-    // 1. Stop active tunnel
-    let tunnel = {
-        let mut active = state.active_tunnel.lock().unwrap();
-        active.take()
-    };
-
-    if let Some(mut t) = tunnel {
-        let _ = t.disconnect().await;
-    }
+async fn disconnect_vpn(app_handle: tauri::AppHandle, state: State<'_, AppState>) -> Result<VpnStatus, String> {
+    // 1. Stop active tunnel sidecar
+    let tunnel_state: State<'_, TunnelState> = app_handle.state();
+    let _ = tunnel::stop_tunnel(tunnel_state).await;
 
     // 2. Update status
-    let mut status = state.vpn_status.lock().unwrap();
-    status.state = ConnectionState::Disconnected;
-    status.current_ip = None;
-    status.protocol = None;
-    status.connected_since = None;
+    let status = {
+        let mut status = state.vpn_status.lock().map_err(|_| "VPN status lock poisoned")?;
+        status.state = ConnectionState::Disconnected;
+        status.current_ip = None;
+        status.protocol = None;
+        status.connected_since = None;
+        status.clone()
+    };
 
-    Ok(status.clone())
+    Ok(status)
 }
 
 #[tauri::command]
@@ -232,24 +434,43 @@ async fn start_sharing(state: State<'_, AppState>) -> Result<bool, String> {
     
     // Start P2P Discovery if not already started
     if state.p2p.get().is_none() {
-        let discovery = PeerDiscovery::new().await.map_err(|e| e.to_string())?;
-        let _ = state.p2p.set(Arc::new(discovery));
+        match PeerDiscovery::new().await {
+            Ok(discovery) => {
+                let _ = state.p2p.set(Arc::new(discovery));
+                println!("P2P Discovery initialized successfully");
+            },
+            Err(e) => {
+                println!("Failed to initialize P2P Discovery: {}", e);
+                // Even if P2P fails, we might still want to share in an degraded mode or fallback.
+                // For now, return the error clearly to the UI.
+                return Err(format!("P2P Init failed: {}", e));
+            }
+        }
     }
     
     Ok(true)
 }
 
 #[tauri::command]
-async fn stop_sharing(state: State<'_, AppState>) -> Result<bool, String> {
+fn stop_sharing(state: State<'_, AppState>) -> Result<bool, String> {
     let mut sharing = state.is_sharing.lock().map_err(|_| "Failed to lock state")?;
     *sharing = false;
     Ok(false)
 }
 
 #[tauri::command]
-async fn get_p2p_status(_state: State<'_, AppState>) -> Result<P2pStats, String> {
+async fn get_p2p_status(state: State<'_, AppState>) -> Result<P2pStats, String> {
+    let sharing = *state.is_sharing.lock().unwrap();
+    if !sharing {
+        return Ok(P2pStats {
+            connected_peers: 0,
+            known_nodes: 0,
+            total_sent: 0,
+            total_received: 0,
+        });
+    }
+
     // In a real implementation, we would query the PeerDiscovery swarm
-    // For now, returning mock data that reflects active movement
     Ok(P2pStats {
         connected_peers: 12,
         known_nodes: 156,
@@ -260,12 +481,113 @@ async fn get_p2p_status(_state: State<'_, AppState>) -> Result<P2pStats, String>
 
 #[tauri::command]
 fn get_vpn_status(state: State<'_, AppState>) -> VpnStatus {
-    state.vpn_status.lock().unwrap().clone()
+    state.vpn_status.lock().map(|g| g.clone()).unwrap_or_default()
+}
+
+#[derive(serde::Serialize)]
+pub struct VpnMetrics {
+    down_mbps: f64,
+    up_mbps: f64,
+    latency_ms: Option<u32>,
+}
+
+#[tauri::command]
+fn get_vpn_metrics(state: State<'_, AppState>) -> VpnMetrics {
+    if let Ok(status) = state.vpn_status.lock() {
+        if matches!(status.state, ConnectionState::Connected) {
+            // Backend stub for metrics until native tunnel stats are available
+            return VpnMetrics {
+                down_mbps: 15.4,
+                up_mbps: 2.1,
+                latency_ms: Some(23),
+            };
+        }
+    }
+    VpnMetrics {
+        down_mbps: 0.0,
+        up_mbps: 0.0,
+        latency_ms: None,
+    }
+}
+
+#[tauri::command]
+async fn get_nodes(group: String, state: State<'_, AppState>) -> Result<serde_json::Value, String> {
+    if group == "COMMUNITY" {
+        Ok(serde_json::json!([]))
+    } else {
+        // Retrieve from cache if valid (less than 5 minutes old)
+        {
+            if let Ok(cache) = state.public_nodes_cache.lock() {
+                if let Some((ref nodes, timestamp)) = *cache {
+                    if timestamp.elapsed().as_secs() < 300 {
+                        println!("Returning public nodes from cache ({} nodes)", nodes.len());
+                        return Ok(serde_json::json!(nodes_to_json(nodes)));
+                    }
+                }
+            }
+        }
+
+        println!("Starting public node discovery with backend: {}...", state.api_client.base_url());
+        let nodes = vpn_core::public_gate::fetch_all_public_nodes(Some(state.api_client.base_url())).await;
+        
+        // Update cache
+        if let Ok(mut cache) = state.public_nodes_cache.lock() {
+            *cache = Some((nodes.clone(), std::time::Instant::now()));
+        }
+        
+        Ok(serde_json::json!(nodes_to_json(&nodes)))
+    }
+}
+
+// Helper to convert nodes to JSON (matching original logic)
+fn nodes_to_json(nodes: &[vpn_core::nodes::VpnNode]) -> Vec<serde_json::Value> {
+    nodes.iter().map(|n| {
+        let (lat, lon) = (n.latitude, n.longitude); // Use REAL coords from node
+        serde_json::json!({
+            "id": n.id,
+            "country_code": n.country_code,
+            "latency_ms": n.ping_ms.unwrap_or(50),
+            "group": "PUBLIC",
+            "provider": format!("{:?}", n.source),
+            "protocol": format!("{:?}", n.protocol),
+            "ovpn_config": n.openvpn_config,
+            "ss_metadata": if n.protocol == vpn_core::protocol::VpnProtocol::Shadowsocks {
+                Some(format!("{}:{}", n.ss_method.as_deref().unwrap_or(""), n.ss_password.as_deref().unwrap_or("")))
+            } else {
+                None
+            },
+            "bandwidth_mbps": n.speed_mbps.unwrap_or(50.0),
+            "lat": lat,
+            "lon": lon,
+        })
+    }).collect()
+}
+
+#[tauri::command]
+async fn get_sessions(_state: State<'_, AppState>) -> Result<serde_json::Value, String> {
+    Ok(serde_json::json!([
+        { "id": 1, "country": "DE", "type": "browsing", "bytes": "15.4 MB", "earning": "+0.15 CR" },
+        { "id": 2, "country": "IR", "type": "censorship-bypass", "bytes": "42.1 MB", "earning": "+0.80 CR" },
+        { "id": 3, "country": "US", "type": "streaming", "bytes": "128.0 MB", "earning": "+1.20 CR" }
+    ]))
+}
+
+#[tauri::command]
+async fn get_wallet_balance_desktop(token: String, state: State<'_, AppState>) -> Result<i64, String> {
+    state.api_client.fetch_balance(&token).await.map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn get_transactions(_token: String, _state: State<'_, AppState>) -> Result<Vec<vpn_core::client::Transaction>, String> {
+    vpn_core::api::simple::get_transactions().map_err(|e| e.to_string())
 }
 
 // Fixed in run()
 pub fn run() {
-    let api_client = VpnApiClient::new("https://api.worldvpn.com".to_string()); 
+    let url = std::env::var("WORLDVPN_API_URL")
+        .unwrap_or_else(|_| "https://worldvpn-backend.onrender.com".to_string());
+    println!("Initializing API client with URL: {}", url);
+    let api_client = VpnApiClient::new(url); 
 
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
@@ -274,18 +596,30 @@ pub fn run() {
             is_sharing: Mutex::new(false),
             p2p: OnceCell::new(),
             api_client,
-            active_tunnel: Mutex::new(None),
+            public_nodes_cache: Mutex::new(None),
         })
+        .manage(TunnelState::new())
+        .plugin(tauri_plugin_shell::init())
         .invoke_handler(tauri::generate_handler![
             generate_identity,
+            import_identity,
+            is_identity_saved,
             login_anonymously_desktop,
             migrate_credits_desktop,
             connect_vpn, 
             disconnect_vpn, 
             get_vpn_status,
+            get_vpn_metrics,
             start_sharing,
             stop_sharing,
-            get_p2p_status
+            get_p2p_status,
+            get_nodes,
+            get_sessions,
+            get_wallet_balance_desktop,
+            get_transactions,
+            tunnel::start_tunnel,
+            tunnel::stop_tunnel,
+            tunnel::get_tunnel_status
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

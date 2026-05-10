@@ -5,14 +5,13 @@
 use clap::{Parser, Subcommand};
 use std::net::SocketAddr;
 use std::time::Duration;
-use tracing::{info, warn, error};
+use tracing::error;
 use tracing_subscriber::EnvFilter;
 use vpn_core::{
     crypto::SecretKey,
     selector::{ProtocolSelector, SelectionContext, NetworkQuality, FirewallProfile, DeviceType, UseCase},
-    tunnel::{ConnectionConfig, Credentials, VpnTunnel, ExternalTunnel, WireGuardTunnel},
+    tunnel::{ConnectionConfig, Credentials, VpnTunnel, GoTunnel},
     protocol::VpnProtocol,
-    mock::MockTunnel,
 };
 
 #[derive(Parser)]
@@ -65,7 +64,7 @@ async fn main() -> anyhow::Result<()> {
 
     match cli.command {
         Commands::Select { country, censored, mobile, battery } => {
-            let mut ctx = SelectionContext {
+            let ctx = SelectionContext {
                 user_country: country,
                 network_quality: NetworkQuality {
                     latency_ms: 50,
@@ -91,7 +90,7 @@ async fn main() -> anyhow::Result<()> {
                 println!("   🛡️ Mode anti-censure activé");
             }
         }
-        Commands::Connect { proto, server } => {
+        Commands::Connect { proto: _, server: _ } => {
             println!("⚠️ Mode simulation locale uniquement.");
         }
         Commands::RemoteConnect { api, user: _, proto } => {
@@ -145,7 +144,7 @@ async fn main() -> anyhow::Result<()> {
             println!("\n🔌 Demande de connexion VPN (Failover/P2P)...");
             let mut session = match client.connect(
                 protocol,
-                Some(pubkey), 
+                pubkey, 
                 Some("FR".into()),
                 &login_response.token
             ).await {
@@ -193,15 +192,14 @@ async fn main() -> anyhow::Result<()> {
             let config = ConnectionConfig {
                 protocol,
                 server_addr,
+                assigned_ip: session.assigned_ip.parse().unwrap_or("127.0.0.1".parse().unwrap()),
                 credentials,
                 timeout: Duration::from_secs(10),
             };
 
             // Création du tunnel réel (CLI rust)
-            let mut tunnel: Box<dyn VpnTunnel> = match protocol {
-                VpnProtocol::WireGuard | VpnProtocol::WireGuardObfuscated => Box::new(WireGuardTunnel::new()),
-                VpnProtocol::Shadowsocks | VpnProtocol::Hysteria2 | VpnProtocol::Trojan | VpnProtocol::VLESS => Box::new(ExternalTunnel::new(protocol)),
-            };
+            let session_id = "cli-test-session".to_string();
+            let mut tunnel: Box<dyn VpnTunnel> = Box::new(GoTunnel::new(session_id, protocol.clone()));
             println!("\n🔌 Initialisation du tunnel {} (Réel)...", protocol.name());
             
             match tunnel.connect(&config).await {
@@ -215,7 +213,7 @@ async fn main() -> anyhow::Result<()> {
                          println!("   • Interface locale : {}", handle.assigned_ip);
                     }
                     
-                    if let Err(e) = tunnel.send(b"Ping").await {
+                    if let Err(_e) = tunnel.send(b"Ping").await {
                         // En mode SOCKS, send n'envoie rien (simulation)
                         if protocol != VpnProtocol::Shadowsocks {
                              println!("⚠️  Note: L'envoi a échoué (normal sans serveur réel)");

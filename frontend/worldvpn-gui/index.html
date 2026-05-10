@@ -4,7 +4,62 @@
     <meta charset="UTF-8" />
     <link rel="icon" type="image/svg+xml" href="/vite.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Tauri + React + Typescript</title>
+    <title>WorldVPN</title>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.css" integrity="sha512-Zcn6xXhQ2k5bHIfE/mHq1AIfXq1I1/JOMi2w+uX5vDkR5b2p1bU1qEw/e1L1oO1F8eP1Z2Z2zZ+Kz+/o+E5m/Q==" crossorigin=""/>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.js" integrity="sha512-BwH//k1w1w1fG2fT1/1A2Q1l0p/p4k5+f4Z2+p0Y6r+/G5D2w+u1kR1R5+Z+O6mX7Vw==" crossorigin=""></script>
+    <style>
+      .leaflet-container {
+        background: #0d1117 !important;
+        font-family: inherit;
+      }
+      .custom-marker-container {
+        position: relative;
+        width: 100%;
+        height: 100%;
+        display: flex;
+        justify-content: center;
+        align-items: center;
+      }
+      .custom-marker-dot {
+        width: 14px;
+        height: 14px;
+        border-radius: 50%;
+        border: 2px solid rgba(255, 255, 255, 0.4);
+        box-shadow: 0 0 12px currentColor;
+      }
+      .custom-marker-badge {
+        position: absolute;
+        top: -6px;
+        right: -10px;
+        background: #ef4444;
+        color: white;
+        font-size: 9px;
+        font-weight: bold;
+        padding: 1px 4px;
+        border-radius: 8px;
+        border: 1px solid rgba(255, 255, 255, 0.2);
+        box-shadow: 0 2px 4px rgba(0,0,0,0.5);
+      }
+      .leaflet-popup-content-wrapper {
+        background: rgba(13, 17, 23, 0.95) !important;
+        backdrop-filter: blur(10px);
+        color: white;
+        border: 1px solid rgba(255,255,255,0.1);
+        border-radius: 12px;
+        box-shadow: 0 10px 30px rgba(0,0,0,0.8);
+      }
+      .leaflet-popup-tip {
+        background: rgba(13, 17, 23, 0.95);
+        border: 1px solid rgba(255,255,255,0.1);
+      }
+      .popup-node-list::-webkit-scrollbar {
+        width: 4px;
+      }
+      .popup-node-list::-webkit-scrollbar-thumb {
+        background: rgba(255,255,255,0.2);
+        border-radius: 2px;
+      }
+    </style>
   </head>
 
   <body>

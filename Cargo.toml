@@ -56,7 +56,3 @@ lto = true
 codegen-units = 1
 strip = true
 
-# Résolution des conflits de versions cryptographiques
-[patch.crates-io]
-# On aligne x25519-dalek sur la version rc.3 utilisée par boringtun 0.6
-x25519-dalek = { git = "https://github.com/dalek-cryptography/x25519-dalek", tag = "2.0.0-rc.3" }

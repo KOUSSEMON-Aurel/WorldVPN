@@ -4,7 +4,6 @@ import 'package:flutter/material.dart';
 import 'package:lucide_icons/lucide_icons.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shared_preferences/shared_preferences.dart';
-import 'package:go_router/go_router.dart';
 import '../../rust_gen/api/simple.dart' as rust;
 import '../../store/settings_provider.dart';
 
@@ -37,11 +36,9 @@ class SettingsScreen extends ConsumerWidget {
               _buildSettingTile(
                 context,
                 icon: LucideIcons.user,
-                title: "Aurel K.",
-                subtitle: "Premium Plan • View Profile",
-                trailing: const Icon(LucideIcons.chevronRight,
-                    size: 16, color: Colors.grey),
-                onTap: () => context.push('/settings/profile'),
+                title: "Anonymous Identity",
+                subtitle: "WorldVPN Alpha User",
+                onTap: () {},
               ),
               const SizedBox(height: 16),
 
@@ -81,13 +78,7 @@ class SettingsScreen extends ConsumerWidget {
                 context,
                 icon: LucideIcons.bell,
                 title: "Notifications",
-                onTap: () {},
-              ),
-              _buildSettingTile(
-                context,
-                icon: LucideIcons.languages,
-                title: "Language",
-                subtitle: settings.language,
+                subtitle: "System managed",
                 onTap: () {},
               ),
               const SizedBox(height: 48),
@@ -98,7 +89,7 @@ class SettingsScreen extends ConsumerWidget {
                 context,
                 icon: LucideIcons.info,
                 title: "Version",
-                subtitle: "1.0.0-alpha.1",
+                subtitle: "1.0.0-beta.1",
                 onTap: () {},
               ),
               const SizedBox(height: 20),
