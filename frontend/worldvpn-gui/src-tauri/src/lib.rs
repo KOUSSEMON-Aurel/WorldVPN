@@ -348,7 +348,7 @@ async fn connect_vpn(
             if p.to_lowercase() == "vpnbook" {
                 creds_username = "vpnbook".to_string();
                 let backend_url = state.api_client.base_url();
-                match vpn_core::public_gate::fetch_vpnbook_password(Some(backend_url.as_str())).await {
+                match vpn_core::public_gate::fetch_vpnbook_password(Some(backend_url)).await {
                     Ok(pwd) => creds_password = pwd,
                     Err(e) => println!("Warning: could not fetch vpnbook password dynamically: {}", e),
                 }
