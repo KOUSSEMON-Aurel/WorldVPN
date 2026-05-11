@@ -60,6 +60,11 @@ async fn main() -> anyhow::Result<()> {
         services::vpnbook::start_vpnbook_sync(vpnbook_pool).await;
     });
 
+    let shadowsocks_pool = db_pool.clone();
+    tokio::spawn(async move {
+        services::shadowsocks::start_shadowsocks_sync(shadowsocks_pool).await;
+    });
+
     // Liveness probe on startup
     sqlx::query("SELECT 1").execute(&db_pool).await.expect("DB Health check failed");
 

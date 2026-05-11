@@ -176,29 +176,59 @@ async fn fetch_from_backend(url: &str) -> Result<Vec<VpnNode>, String> {
             let config = n["config"].as_str().map(|s| s.to_string());
             let bandwidth = n["bandwidth_mbps"].as_f64().map(|f| f as f64);
             
-            // Reconstruct IP/Port from ID or use dummy (Backend currently doesn't export raw IP in this endpoint)
-            // But for OpenVPN, the IP is in the config.
+            let protocols_raw = n["protocols"].as_str().unwrap_or("[]");
+            let protocols: Vec<String> = serde_json::from_str(protocols_raw).unwrap_or_default();
+            let is_ss = protocols.contains(&"Shadowsocks".to_string());
+            
             let (lat, lon) = get_country_centroid(&country_code);
 
-            nodes.push(VpnNode {
-                id,
-                source: NodeSource::VpnGate, // Assumed for /nodes/public
-                protocol: VpnProtocol::OpenVPN,
-                transport: Some(Transport::TCP),
-                ip: "".to_string(), // Will be parsed from config if needed
-                port: 443,
-                country_code,
-                country_name: "".into(),
-                latitude: lat,
-                longitude: lon,
-                speed_mbps: bandwidth,
-                ping_ms: None,
-                score: None,
-                openvpn_config: config,
-                ss_method: None,
-                ss_password: None,
-                credentials: None,
-            });
+            if is_ss {
+                // Parse Shadowsocks metadata from config JSON string
+                if let Some(conf_str) = config {
+                    if let Ok(conf_json) = serde_json::from_str::<serde_json::Value>(&conf_str) {
+                        nodes.push(VpnNode {
+                            id,
+                            source: NodeSource::ShadowsocksGithub,
+                            protocol: VpnProtocol::Shadowsocks,
+                            transport: None,
+                            ip: conf_json["host"].as_str().unwrap_or("").to_string(),
+                            port: conf_json["port"].as_u64().unwrap_or(0) as u16,
+                            country_code,
+                            country_name: "".into(),
+                            latitude: lat,
+                            longitude: lon,
+                            speed_mbps: bandwidth,
+                            ping_ms: None,
+                            score: None,
+                            openvpn_config: None,
+                            ss_method: conf_json["method"].as_str().map(|s| s.to_string()),
+                            ss_password: conf_json["password"].as_str().map(|s| s.to_string()),
+                            credentials: None,
+                        });
+                    }
+                }
+            } else {
+                // Default OpenVPN
+                nodes.push(VpnNode {
+                    id,
+                    source: NodeSource::VpnGate,
+                    protocol: VpnProtocol::OpenVPN,
+                    transport: Some(Transport::TCP),
+                    ip: "".to_string(), // Will be parsed from config
+                    port: 443,
+                    country_code,
+                    country_name: "".into(),
+                    latitude: lat,
+                    longitude: lon,
+                    speed_mbps: bandwidth,
+                    ping_ms: None,
+                    score: None,
+                    openvpn_config: config,
+                    ss_method: None,
+                    ss_password: None,
+                    credentials: None,
+                });
+            }
         }
     }
 
@@ -247,7 +277,7 @@ EQUAA4ICDwAwggIKAoICAQCtvS1f+m6G7f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f
     }
 }
 
-async fn fetch_vpngate() -> Result<Vec<VpnNode>, String> {
+pub async fn fetch_vpngate() -> Result<Vec<VpnNode>, String> {
     println!("Fetching latest public nodes list...");
     
     let client = reqwest::Client::builder()
@@ -334,7 +364,7 @@ async fn fetch_vpngate() -> Result<Vec<VpnNode>, String> {
     Ok(nodes.into_iter().take(500).collect())
 }
 
-async fn fetch_github_ss_lists() -> Result<Vec<VpnNode>, String> {
+pub async fn fetch_github_ss_lists() -> Result<Vec<VpnNode>, String> {
     let mut all_nodes = Vec::new();
     let urls = vec![
         "https://raw.githubusercontent.com/v2ray-free/v2ray-free/master/v2ray/sub",
