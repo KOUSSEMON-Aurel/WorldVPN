@@ -26,6 +26,13 @@ async fn sync_nodes(pool: &PgPool) -> anyhow::Result<()> {
         // Generate a stable ID
         let node_id = format!("ss_{}_{}", node.ip.replace(".", "_"), node.port);
         
+        // Ensure country_code is strictly 2 characters for CHAR(2) column
+        let country_code = if node.country_code.len() == 2 {
+            node.country_code.to_uppercase()
+        } else {
+            "??".to_string()
+        };
+
         // Prepare metadata for public_config_data
         let config_data = json!({
             "protocol": "Shadowsocks",
@@ -48,7 +55,7 @@ async fn sync_nodes(pool: &PgPool) -> anyhow::Result<()> {
                    updated_at = CURRENT_TIMESTAMP"#
         )
         .bind(&node_id)
-        .bind(&node.country_code)
+        .bind(&country_code)
         .bind(&config_data)
         .bind(format!("hash_{}", node_id))
         .execute(pool)
