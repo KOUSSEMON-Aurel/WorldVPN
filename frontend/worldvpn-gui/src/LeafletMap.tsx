@@ -175,6 +175,7 @@ export function LeafletMap({ nodes, onConnect, nodeGroup }: any) {
 
   }, [nodes, nodeGroup, onConnect]);
 
+
   if (typeof L === "undefined") {
     return (
       <div className="w-full h-full flex flex-col items-center justify-center bg-surface/50 gap-4">
@@ -184,5 +185,17 @@ export function LeafletMap({ nodes, onConnect, nodeGroup }: any) {
     );
   }
 
-  return <div ref={containerRef} className="w-full h-full z-10 rounded-3xl" />;
+  return (
+    <div className="relative w-full h-full">
+      <div ref={containerRef} className="w-full h-full z-10 rounded-3xl" />
+      {nodes.length === 0 && (
+        <div className="absolute inset-0 z-20 flex items-center justify-center pointer-events-none">
+          <div className="bg-surface/80 backdrop-blur-md px-4 py-2 rounded-full border border-white/10 flex items-center gap-3 animate-pulse">
+            <div className="w-2 h-2 rounded-full bg-primary animate-ping"></div>
+            <span className="text-[10px] font-black uppercase tracking-widest text-white/70">Discovering Nodes...</span>
+          </div>
+        </div>
+      )}
+    </div>
+  );
 }

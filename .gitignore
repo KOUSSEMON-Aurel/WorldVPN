@@ -49,3 +49,6 @@ id_ed25519
 *.bak
 *.backup
 *~
+
+# Fichiers de session/test (Authentification)
+login.json

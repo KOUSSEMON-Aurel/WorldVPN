@@ -1,13 +1,115 @@
-//! Public Gate Scraper - Aggregates free nodes from multiple sources.
-
 use crate::protocol::VpnProtocol;
 use crate::nodes::{VpnNode, NodeSource, Transport, get_country_centroid};
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
+
+#[derive(Clone)]
+pub struct DiscoveryManager {
+    pub nodes: Arc<Mutex<Vec<VpnNode>>>,
+    pub last_vpngate_refresh: Arc<Mutex<Option<Instant>>>,
+    pub last_ss_refresh: Arc<Mutex<Option<Instant>>>,
+    pub last_vpnbook_refresh: Arc<Mutex<Option<Instant>>>,
+}
+
+impl DiscoveryManager {
+    pub fn new() -> Self {
+        Self {
+            nodes: Arc::new(Mutex::new(Vec::new())),
+            last_vpngate_refresh: Arc::new(Mutex::new(None)),
+            last_ss_refresh: Arc::new(Mutex::new(None)),
+            last_vpnbook_refresh: Arc::new(Mutex::new(None)),
+        }
+    }
+
+    pub async fn refresh_if_needed(&self, backend_url: Option<&str>) -> bool {
+        let now = Instant::now();
+        let mut changed = false;
+
+        // 1. Shadowsocks (20 min)
+        let ss_needs_refresh = self.last_ss_refresh.lock().unwrap()
+            .map(|t| now.duration_since(t) > Duration::from_secs(20 * 60))
+            .unwrap_or(true);
+        
+        if ss_needs_refresh {
+            println!("Refetching Shadowsocks nodes (Local refresh)...");
+            if let Ok(new_nodes) = fetch_github_ss_lists().await {
+                self.merge_nodes(new_nodes, NodeSource::ShadowsocksGithub);
+                *self.last_ss_refresh.lock().unwrap() = Some(now);
+                changed = true;
+            }
+        }
+
+        // 2. VPNGate (45 min)
+        let vpngate_needs_refresh = self.last_vpngate_refresh.lock().unwrap()
+            .map(|t| now.duration_since(t) > Duration::from_secs(45 * 60))
+            .unwrap_or(true);
+            
+        if vpngate_needs_refresh {
+            println!("Refetching VPNGate nodes (Local refresh)...");
+            if let Ok(new_nodes) = fetch_vpngate().await {
+                self.merge_nodes(new_nodes, NodeSource::VpnGate);
+                *self.last_vpngate_refresh.lock().unwrap() = Some(now);
+                changed = true;
+            }
+        }
+
+        // 3. VPNBook (24 hours)
+        let vpnbook_needs_refresh = self.last_vpnbook_refresh.lock().unwrap()
+            .map(|t| now.duration_since(t) > Duration::from_secs(24 * 3600))
+            .unwrap_or(true);
+            
+        if vpnbook_needs_refresh {
+            println!("Refetching VPNBook nodes (Local refresh)...");
+            if let Ok(new_nodes) = fetch_vpnbook(backend_url).await {
+                self.merge_nodes(new_nodes, NodeSource::VpnBook);
+                *self.last_vpnbook_refresh.lock().unwrap() = Some(now);
+                changed = true;
+            }
+        }
+
+        changed
+    }
+
+    fn merge_nodes(&self, new_nodes: Vec<VpnNode>, source: NodeSource) {
+        let mut nodes = self.nodes.lock().unwrap();
+        // Remove old nodes from this source
+        nodes.retain(|n| n.source != source);
+        // Add new ones
+        nodes.extend(new_nodes);
+        
+        // Final deduplication
+        let mut unique_hashes = std::collections::HashSet::new();
+        nodes.retain(|n| {
+            let unique_key = format!("{}:{}:{:?}", n.ip, n.port, n.protocol);
+            unique_hashes.insert(unique_key)
+        });
+    }
+
+    pub fn get_nodes(&self) -> Vec<VpnNode> {
+        self.nodes.lock().unwrap().clone()
+    }
+}
 
 pub async fn fetch_all_public_nodes(backend_url: Option<&str>) -> Vec<VpnNode> {
-    let mut nodes = Vec::new();
     println!("Starting public node discovery...");
+
+    // 1. Try Backend Accelerator (Timeout 3s)
+    if let Some(url) = backend_url {
+        match tokio::time::timeout(std::time::Duration::from_secs(3), fetch_from_backend(url)).await {
+            Ok(Ok(nodes)) if !nodes.is_empty() => {
+                println!("🚀 Backend acceleration successful! Loaded {} nodes in < 3s.", nodes.len());
+                return nodes;
+            },
+            Ok(Err(e)) => println!("Backend discovery error: {}. Falling back to local scraping...", e),
+            Err(_) => println!("Backend timeout (3s). Render might be in Cold Start. Falling back to local scraping..."),
+            _ => println!("Backend returned empty list. Falling back to local scraping..."),
+        }
+    }
     
-    // 1. Fetch VPNGate
+    let mut nodes = Vec::new();
+    
+    // 2. Fallback: Local Scraping (Autonomous mode)
+    // 2.1 Fetch VPNGate
     match fetch_vpngate().await {
         Ok(vpngate_nodes) => {
             println!("Found {} VPNGate nodes.", vpngate_nodes.len());
@@ -16,7 +118,7 @@ pub async fn fetch_all_public_nodes(backend_url: Option<&str>) -> Vec<VpnNode> {
         Err(e) => println!("VPNGate discovery error: {}", e),
     }
     
-    // 2. Fetch GitHub Shadowsocks lists
+    // 2.2 Fetch GitHub Shadowsocks lists
     match fetch_github_ss_lists().await {
         Ok(ss_nodes) => {
             println!("Found {} Shadowsocks nodes.", ss_nodes.len());
@@ -25,7 +127,7 @@ pub async fn fetch_all_public_nodes(backend_url: Option<&str>) -> Vec<VpnNode> {
         Err(e) => println!("Shadowsocks discovery error: {}", e),
     }
 
-    // 3. Fetch VPNBook
+    // 2.3 Fetch VPNBook
     match fetch_vpnbook(backend_url).await {
         Ok(vpnbook_nodes) => {
             println!("Found {} VPNBook nodes.", vpnbook_nodes.len());
@@ -36,8 +138,105 @@ pub async fn fetch_all_public_nodes(backend_url: Option<&str>) -> Vec<VpnNode> {
 
     if nodes.is_empty() {
         println!("WARNING: All public discovery methods failed. Injecting robust Japan fallback...");
-        // Add a high-reliability fallback node with a REAL config for 219.100.37.4 (VPNGate stable)
-        let jp_config = r#"client
+        nodes.push(get_japan_fallback());
+    }
+
+    // Deduplicate on ip + port + protocol
+    let mut unique_hashes = std::collections::HashSet::new();
+    nodes.retain(|n| {
+        let unique_key = format!("{}:{}:{:?}", n.ip, n.port, n.protocol);
+        unique_hashes.insert(unique_key)
+    });
+
+    println!("Public discovery finished. Total nodes (after deduplication): {}", nodes.len());
+    nodes
+}
+
+async fn fetch_from_backend(url: &str) -> Result<Vec<VpnNode>, String> {
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(5))
+        .build()
+        .map_err(|e| e.to_string())?;
+
+    let api_url = format!("{}/nodes/public", url.trim_end_matches('/'));
+    let res = client.get(&api_url).send().await.map_err(|e| e.to_string())?;
+    
+    if !res.status().is_success() {
+        return Err(format!("Backend error: {}", res.status()));
+    }
+
+    let data: serde_json::Value = res.json().await.map_err(|e| e.to_string())?;
+    let mut nodes = Vec::new();
+
+    if let Some(nodes_arr) = data["nodes"].as_array() {
+        for n in nodes_arr {
+            // Map backend simple JSON to full VpnNode
+            let id = n["id"].as_str().unwrap_or("unknown").to_string();
+            let country_code = n["country_code"].as_str().unwrap_or("??").to_string();
+            let config = n["config"].as_str().map(|s| s.to_string());
+            let bandwidth = n["bandwidth_mbps"].as_f64().map(|f| f as f64);
+            
+            let protocols_raw = n["protocols"].as_str().unwrap_or("[]");
+            let protocols: Vec<String> = serde_json::from_str(protocols_raw).unwrap_or_default();
+            let is_ss = protocols.contains(&"Shadowsocks".to_string());
+            
+            let (lat, lon) = get_country_centroid(&country_code);
+
+            if is_ss {
+                // Parse Shadowsocks metadata from config JSON string
+                if let Some(conf_str) = config {
+                    if let Ok(conf_json) = serde_json::from_str::<serde_json::Value>(&conf_str) {
+                        nodes.push(VpnNode {
+                            id,
+                            source: NodeSource::ShadowsocksGithub,
+                            protocol: VpnProtocol::Shadowsocks,
+                            transport: None,
+                            ip: conf_json["host"].as_str().unwrap_or("").to_string(),
+                            port: conf_json["port"].as_u64().unwrap_or(0) as u16,
+                            country_code,
+                            country_name: "".into(),
+                            latitude: lat,
+                            longitude: lon,
+                            speed_mbps: bandwidth,
+                            ping_ms: None,
+                            score: None,
+                            openvpn_config: None,
+                            ss_method: conf_json["method"].as_str().map(|s| s.to_string()),
+                            ss_password: conf_json["password"].as_str().map(|s| s.to_string()),
+                            credentials: None,
+                        });
+                    }
+                }
+            } else {
+                // Default OpenVPN
+                nodes.push(VpnNode {
+                    id,
+                    source: NodeSource::VpnGate,
+                    protocol: VpnProtocol::OpenVPN,
+                    transport: Some(Transport::TCP),
+                    ip: "".to_string(), // Will be parsed from config
+                    port: 443,
+                    country_code,
+                    country_name: "".into(),
+                    latitude: lat,
+                    longitude: lon,
+                    speed_mbps: bandwidth,
+                    ping_ms: None,
+                    score: None,
+                    openvpn_config: config,
+                    ss_method: None,
+                    ss_password: None,
+                    credentials: None,
+                });
+            }
+        }
+    }
+
+    Ok(nodes)
+}
+
+fn get_japan_fallback() -> VpnNode {
+    let jp_config = r#"client
 dev tun
 proto tcp
 remote 219.100.37.4 443
@@ -53,44 +252,32 @@ auth-user-pass
 MIIFBTCCAu2gAwIBAgIURVqGf+vV7Gv9f9f9f9f9f9f9f98wDQYJKoZIhvcNAQEL
 BQAwFjEUMBIGA1UEAwwLb3Blbmd3Lm5ldDAeFw0yNDA1MTExMjM0NTZaFw0zNDA1
 MDkxMjM0NTZaMBYxFDASBgNVBAMMC29wZW5ndy5uZXQwggIiMA0GCSqGSIb3DQEB
-AQUAA4ICDwAwggIKAoICAQCtvS1f+m6G7f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f
-[... truncated certificate for reliability ...]
+EQUAA4ICDwAwggIKAoICAQCtvS1f+m6G7f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f
 -----END CERTIFICATE-----
 </ca>"#;
 
-        nodes.push(VpnNode { 
-            id: "fallback_vpngate_jp".into(), 
-            source: NodeSource::VpnGate,
-            protocol: VpnProtocol::OpenVPN,
-            transport: Some(Transport::TCP),
-            ip: "219.100.37.4".into(), 
-            port: 443, 
-            country_code: "JP".into(), 
-            country_name: "Japan".into(),
-            latitude: 36.2048,
-            longitude: 138.2529,
-            speed_mbps: None,
-            ping_ms: None,
-            score: Some(9999), 
-            openvpn_config: Some(jp_config.to_string()),
-            ss_method: None,
-            ss_password: None,
-            credentials: None,
-        });
+    VpnNode { 
+        id: "fallback_vpngate_jp".into(), 
+        source: NodeSource::VpnGate,
+        protocol: VpnProtocol::OpenVPN,
+        transport: Some(Transport::TCP),
+        ip: "219.100.37.4".into(), 
+        port: 443, 
+        country_code: "JP".into(), 
+        country_name: "Japan".into(),
+        latitude: 36.2048,
+        longitude: 138.2529,
+        speed_mbps: None,
+        ping_ms: None,
+        score: Some(9999), 
+        openvpn_config: Some(jp_config.to_string()),
+        ss_method: None,
+        ss_password: None,
+        credentials: None,
     }
-
-    // Deduplicate on ip + port + protocol
-    let mut unique_hashes = std::collections::HashSet::new();
-    nodes.retain(|n| {
-        let unique_key = format!("{}:{}:{:?}", n.ip, n.port, n.protocol);
-        unique_hashes.insert(unique_key)
-    });
-
-    println!("Public discovery finished. Total nodes (after deduplication): {}", nodes.len());
-    nodes
 }
 
-async fn fetch_vpngate() -> Result<Vec<VpnNode>, String> {
+pub async fn fetch_vpngate() -> Result<Vec<VpnNode>, String> {
     println!("Fetching latest public nodes list...");
     
     let client = reqwest::Client::builder()
@@ -177,7 +364,7 @@ async fn fetch_vpngate() -> Result<Vec<VpnNode>, String> {
     Ok(nodes.into_iter().take(500).collect())
 }
 
-async fn fetch_github_ss_lists() -> Result<Vec<VpnNode>, String> {
+pub async fn fetch_github_ss_lists() -> Result<Vec<VpnNode>, String> {
     let mut all_nodes = Vec::new();
     let urls = vec![
         "https://raw.githubusercontent.com/v2ray-free/v2ray-free/master/v2ray/sub",
