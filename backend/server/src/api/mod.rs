@@ -11,8 +11,7 @@ pub mod vpnbook;
 
 pub fn router(state: AppState) -> Router {
     Router::new()
-        // Health check
-        .route("/health", get(health::health_check))
+        // (Health check is now handled in main.rs to bypass rate limiting)
         
         // Prometheus metrics
         .route("/metrics", {

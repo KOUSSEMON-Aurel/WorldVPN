@@ -48,8 +48,15 @@ async fn main() -> anyhow::Result<()> {
     );
     let governor_layer = GovernorLayer { config: governor_config };
 
-    // Register API routes
-    let app = api::router(state.clone()).layer(governor_layer);
+    // Create the main application router
+    let main_router = api::router(state.clone());
+    
+    // EXCEPTION: The /health route is mounted AFTER the governor layer 
+    // or on a separate router to ensure Render's health check ALWAYS passes 
+    // even if the rate limiter is triggered or services are warming up.
+    let app = axum::Router::new()
+        .route("/health", axum::routing::get(api::health::health_check))
+        .merge(main_router.layer(governor_layer));
 
     // --- 4. BACKGROUND INITIALIZATION ---
     let db_url = std::env::var("DATABASE_URL").expect("DATABASE_URL must be set");
@@ -81,28 +88,29 @@ async fn main() -> anyhow::Result<()> {
                     info!("✅ Migrations synced.");
                 }
 
-                // Background tasks
+                // Background tasks - MASSIVE DELAY to ensure Render health check passes first
+                // On Render free tier, CPU is very limited at startup.
                 let p1 = db_pool.clone();
                 tokio::spawn(async move {
-                    tokio::time::sleep(std::time::Duration::from_secs(10)).await;
+                    tokio::time::sleep(std::time::Duration::from_secs(60)).await;
                     services::vpngate::start_vpngate_sync(p1).await;
                 });
 
                 let p2 = db_pool.clone();
                 tokio::spawn(async move {
-                    tokio::time::sleep(std::time::Duration::from_secs(15)).await;
+                    tokio::time::sleep(std::time::Duration::from_secs(90)).await;
                     services::pruning::start_pruning_service(p2).await;
                 });
 
                 let p3 = db_pool.clone();
                 tokio::spawn(async move {
-                    tokio::time::sleep(std::time::Duration::from_secs(20)).await;
+                    tokio::time::sleep(std::time::Duration::from_secs(120)).await;
                     services::vpnbook::start_vpnbook_sync(p3).await;
                 });
 
                 let p4 = db_pool.clone();
                 tokio::spawn(async move {
-                    tokio::time::sleep(std::time::Duration::from_secs(25)).await;
+                    tokio::time::sleep(std::time::Duration::from_secs(150)).await;
                     services::shadowsocks::start_shadowsocks_sync(p4).await;
                 });
             }
