@@ -39,6 +39,13 @@ async fn main() -> anyhow::Result<()> {
 
     // Run database migrations automatically
     info!("🔄 Running database migrations...");
+    
+    // WORKAROUND: Force cleanup of problematic migration record if it exists in the DB but is causing VersionMissing
+    // This allows SQLx to "re-discover" the file present in the binary.
+    let _ = sqlx::query("DELETE FROM _sqlx_migrations WHERE version = 20260510163000")
+        .execute(&db_pool)
+        .await;
+
     sqlx::migrate!("./migrations")
         .run(&db_pool)
         .await
