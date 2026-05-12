@@ -1,3 +1,4 @@
+// Build: 2026-05-12 — force recompile to embed migrations
 mod state;
 mod api;
 mod auth;
