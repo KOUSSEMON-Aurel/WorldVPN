@@ -37,27 +37,40 @@ async fn main() -> anyhow::Result<()> {
         .await
         .expect("Failed to connect to PostgreSQL database");
 
-    // Run database migrations automatically
-    info!("🔄 Running database migrations...");
-    
-    // WORKAROUND: Force cleanup of problematic migration record if it exists in the DB but is causing VersionMissing
-    // This allows SQLx to "re-discover" the file present in the binary.
-    let _ = sqlx::query("DELETE FROM _sqlx_migrations WHERE version = 20260510163000")
-        .execute(&db_pool)
-        .await;
+    // Initialize global application state
+    let state = AppState::new(Some(db_pool.clone()));
 
-    sqlx::migrate!("./migrations")
-        .run(&db_pool)
-        .await
-        .expect("Failed to run database migrations");
+    // Rate limiter: 10 requests per second per IP (replenish 1 token / 100ms)
+    let governor_config = Arc::new(
+        GovernorConfigBuilder::default()
+            .per_millisecond(100)
+            .burst_size(10)
+            .finish()
+            .expect("Invalid rate limiter config"),
+    );
+    let governor_layer = GovernorLayer { config: governor_config };
 
-    // Liveness probe on startup (BEFORE spawning heavy background workers)
-    info!("💓 Running initial DB health check...");
-    sqlx::query("SELECT 1").execute(&db_pool).await.expect("DB Health check failed");
+    // Register API routes with rate limiting middleware
+    let app = api::router(state).layer(governor_layer);
+    let addr = SocketAddr::from(([0, 0, 0, 0], 3000));
 
-    // Start background services with an initial staggered delay
-    // This allows the web server to bind to port 3000 immediately without getting blocked
-    // by massive DB inserts (which exhausts the connection pool and CPU on free/shared tiers).
+    // Spawn migrations and background services in parallel
+    let migration_pool = db_pool.clone();
+    tokio::spawn(async move {
+        info!("🔄 Running database migrations in background...");
+        
+        // Cleanup workaround
+        let _ = sqlx::query("DELETE FROM _sqlx_migrations WHERE version = 20260510163000")
+            .execute(&migration_pool)
+            .await;
+
+        match sqlx::migrate!("./migrations").run(&migration_pool).await {
+            Ok(_) => info!("✅ Database migrations completed successfully"),
+            Err(e) => tracing::error!("❌ Database migration error: {}", e),
+        }
+    });
+
+    // Start background services with their respective delays
     let vpngate_pool = db_pool.clone();
     tokio::spawn(async move {
         tokio::time::sleep(std::time::Duration::from_secs(10)).await;
@@ -82,25 +95,6 @@ async fn main() -> anyhow::Result<()> {
         services::shadowsocks::start_shadowsocks_sync(shadowsocks_pool).await;
     });
 
-    // Initialize global application state
-    let state = AppState::new(Some(db_pool));
-
-    // Rate limiter: 10 requests per second per IP (replenish 1 token / 100ms)
-    // Guards against identity spam and brute-force on /auth/*
-    let governor_config = Arc::new(
-        GovernorConfigBuilder::default()
-            .per_millisecond(100)
-            .burst_size(10)
-            .finish()
-            .expect("Invalid rate limiter config"),
-    );
-    let governor_layer = GovernorLayer { config: governor_config };
-
-    // Register API routes with rate limiting middleware
-    let app = api::router(state).layer(governor_layer);
-
-    let addr = SocketAddr::from(([0, 0, 0, 0], 3000));
-
     if use_tls {
         info!("🔒 HTTPS/TLS mode enabled");
         
@@ -109,40 +103,25 @@ async fn main() -> anyhow::Result<()> {
         let key_path = std::env::var("TLS_KEY_PATH")
             .unwrap_or_else(|_| "backend/server/key.pem".to_string());
 
-        info!("📜 Loading certificate: {}", cert_path);
-        info!("🔑 Loading private key: {}", key_path);
+        info!("🎧 HTTPS API Server listening on https://{}", addr);
 
-        let cert_file = std::fs::File::open(&cert_path)
-            .expect("Failed to open certificate file");
+        let cert_file = std::fs::File::open(&cert_path).expect("Failed to open cert");
         let mut cert_reader = std::io::BufReader::new(cert_file);
-        
-        let certs: Vec<rustls::pki_types::CertificateDer> = rustls_pemfile::certs(&mut cert_reader)
-            .collect::<Result<Vec<_>, _>>()
-            .expect("Error reading certificates");
+        let certs = rustls_pemfile::certs(&mut cert_reader).collect::<Result<Vec<_>, _>>().expect("Cert error");
 
-        let key_file = std::fs::File::open(&key_path)
-            .expect("Failed to open key file");
+        let key_file = std::fs::File::open(&key_path).expect("Failed to open key");
         let mut key_reader = std::io::BufReader::new(key_file);
-        
-        let key = rustls_pemfile::private_key(&mut key_reader)
-            .expect("Error reading key")
-            .expect("Private key not found");
+        let key = rustls_pemfile::private_key(&mut key_reader).expect("Key error").expect("No key");
 
         let mut server_config = rustls::ServerConfig::builder()
             .with_no_client_auth()
             .with_single_cert(certs, key)
-            .expect("Invalid TLS configuration");
-
-        // Negotiate ALPN for H2 and HTTP/1.1
+            .expect("Invalid TLS");
         server_config.alpn_protocols = vec![b"h2".to_vec(), b"http/1.1".to_vec()];
 
         let tls_acceptor = tokio_rustls::TlsAcceptor::from(Arc::new(server_config));
-
-        info!("🎧 HTTPS API Server listening on https://{}", addr);
-
         let listener = tokio::net::TcpListener::bind(addr).await?;
-
-        // Primary connection accept loop
+        
         loop {
             let (tcp_stream, remote_addr) = listener.accept().await?;
             let tls_acceptor = tls_acceptor.clone();
@@ -157,7 +136,6 @@ async fn main() -> anyhow::Result<()> {
                     }
                 };
 
-                // Serve connection via hyper (low-level handling for custom TLS)
                 if let Err(e) = hyper::server::conn::http1::Builder::new()
                     .serve_connection(
                         hyper_util::rt::TokioIo::new(tls_stream),
