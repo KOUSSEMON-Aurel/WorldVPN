@@ -29,14 +29,10 @@ pub struct ConnectResponse {
 }
 
 /// POST /vpn/connect - Connect to VPN via P2P node or fallback server
-pub async fn connect(
-    State(state): State<AppState>,
-    user: crate::auth::AuthUser,
-    Json(payload): Json<ConnectRequest>,
-) -> impl IntoResponse {
-    tracing::info!("Connection request from user: {} (JWT: {})", payload.username, user.0.sub);
-
-    let pool = state.db.as_ref().expect("DB not initialized");
+    let pool = match state.db.get() {
+        Some(p) => p,
+        None => return (StatusCode::SERVICE_UNAVAILABLE, Json(json!({"error": "Service warming up, please retry in a few seconds"}))).into_response(),
+    };
 
     // 1. Check user balance (must have credits to connect)
     let balance_check = sqlx::query("SELECT credits FROM users WHERE id = $1")
@@ -223,7 +219,10 @@ pub async fn disconnect(
     user: crate::auth::AuthUser,
     Json(payload): Json<DisconnectRequest>,
 ) -> impl IntoResponse {
-    let pool = state.db.as_ref().expect("DB not initialized");
+    let pool = match state.db.get() {
+        Some(p) => p,
+        None => return (StatusCode::SERVICE_UNAVAILABLE, Json(json!({"error": "Service warming up, please retry in a few seconds"}))).into_response(),
+    };
 
     // End the session
     let _ = sqlx::query("DELETE FROM sessions WHERE id = $1 AND user_id = $2")

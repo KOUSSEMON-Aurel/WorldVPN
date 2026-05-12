@@ -25,7 +25,10 @@ pub async fn login(
     State(state): State<AppState>,
     Json(payload): Json<LoginRequest>,
 ) -> impl IntoResponse {
-    let pool = state.db.as_ref().expect("DB non initialisée");
+    let pool = match state.db.get() {
+        Some(p) => p,
+        None => return (StatusCode::SERVICE_UNAVAILABLE, Json(json!({"error": "Service warming up, please retry in a few seconds"}))).into_response(),
+    };
 
     // Récupération de l'utilisateur
     let user = sqlx::query("SELECT id, username, password_hash FROM users WHERE username = $1")
@@ -111,7 +114,10 @@ pub async fn identity_login(
     State(state): State<AppState>,
     Json(payload): Json<IdentityLoginRequest>,
 ) -> impl IntoResponse {
-    let pool = state.db.as_ref().expect("DB non initialisée");
+    let pool = match state.db.get() {
+        Some(p) => p,
+        None => return (StatusCode::SERVICE_UNAVAILABLE, Json(json!({"error": "Service warming up, please retry in a few seconds"}))).into_response(),
+    };
 
     // 1. Vérification de la signature
     use vpn_core::crypto::IdentityKey;
@@ -214,7 +220,10 @@ pub async fn migrate_credits(
     State(state): State<AppState>,
     Json(payload): Json<MigrateCreditsRequest>,
 ) -> impl IntoResponse {
-    let pool = state.db.as_ref().expect("DB non initialisée");
+    let pool = match state.db.get() {
+        Some(p) => p,
+        None => return (StatusCode::SERVICE_UNAVAILABLE, Json(json!({"error": "Service warming up, please retry in a few seconds"}))).into_response(),
+    };
 
     // 1. Vérification de la signature (Preuve de possession de l'ancienne clé)
     use vpn_core::crypto::IdentityKey;

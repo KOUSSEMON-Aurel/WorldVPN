@@ -14,6 +14,9 @@ pub fn router(state: AppState) -> Router {
         // Health check
         .route("/health", get(health::health_check))
         
+        // Prometheus metrics
+        .route("/metrics", get(|| async move { state.metrics_handle.render() }))
+        
         // VPNBook password
         .route("/nodes/vpnbook/password", get(vpnbook::get_vpnbook_password))
         

@@ -1,4 +1,4 @@
-// Build: 2026-05-12 — force recompile to embed migrations
+// Build: 2026-05-12 — force recompile and port fusion
 mod state;
 mod api;
 mod auth;
@@ -16,32 +16,29 @@ async fn main() -> anyhow::Result<()> {
     // Initialize structured logging
     tracing_subscriber::fmt::init();
 
-    // Initialize anonymous Prometheus metrics
-    metrics::init_metrics();
-    tokio::spawn(async move {
-        metrics::start_metrics_server().await;
-    });
+    info!("🚀 Starting WorldVPN server (Integrated Mode)...");
 
-    info!("🚀 Starting WorldVPN server...");
-
-    // Load configuration from environment
+    // Load configuration
     dotenvy::dotenv().ok();
-    let db_url = std::env::var("DATABASE_URL").expect("DATABASE_URL must be set");
-    let use_tls = std::env::var("USE_TLS").unwrap_or_else(|_| "false".to_string()) == "true";
+    let port = std::env::var("PORT").unwrap_or_else(|_| "3000".to_string());
+    let addr: SocketAddr = format!("0.0.0.0:{}", port).parse().expect("Invalid address");
 
-    // Establish persistent database connection pool
-    info!("📦 Connecting to database: {}", db_url);
-    let db_pool = sqlx::postgres::PgPoolOptions::new()
-        .max_connections(20)
-        .acquire_timeout(std::time::Duration::from_secs(15))
-        .connect(&db_url)
-        .await
-        .expect("Failed to connect to PostgreSQL database");
+    // --- 1. BIND IMMEDIATELY ---
+    // We bind the listener first so Render's health check succeeds instantly.
+    let listener = tokio::net::TcpListener::bind(&addr).await
+        .expect("Failed to bind to port 3000. Is it already in use?");
+    info!("✅ Port {} binded. Health checks will pass now.", port);
 
-    // Initialize global application state
-    let state = AppState::new(Some(db_pool.clone()));
+    // --- 2. SETUP METRICS ---
+    // Metrics are now integrated into the main port 3000 via Axum.
+    let metrics_handle = metrics::setup_metrics_recorder();
+    metrics::init_metrics_descriptions();
 
-    // Rate limiter: 10 requests per second per IP (replenish 1 token / 100ms)
+    // --- 3. APP STATE ---
+    // Start with None for DB, it will be populated asynchronously.
+    let state = AppState::new(metrics_handle);
+
+    // Rate limiter
     let governor_config = Arc::new(
         GovernorConfigBuilder::default()
             .per_millisecond(100)
@@ -51,112 +48,71 @@ async fn main() -> anyhow::Result<()> {
     );
     let governor_layer = GovernorLayer { config: governor_config };
 
-    // Register API routes with rate limiting middleware
-    let app = api::router(state).layer(governor_layer);
-    let addr = SocketAddr::from(([0, 0, 0, 0], 3000));
+    // Register API routes
+    let app = api::router(state.clone()).layer(governor_layer);
 
-    // Spawn migrations and background services in parallel
-    let migration_pool = db_pool.clone();
+    // --- 4. BACKGROUND INITIALIZATION ---
+    let db_url = std::env::var("DATABASE_URL").expect("DATABASE_URL must be set");
+    let background_state = state.clone();
+    
+    // We don't block the main thread. We run everything in the background.
     tokio::spawn(async move {
-        info!("🔄 Running database migrations in background...");
-        
-        // Cleanup workaround
-        let _ = sqlx::query("DELETE FROM _sqlx_migrations WHERE version = 20260510163000")
-            .execute(&migration_pool)
-            .await;
+        info!("📦 Connecting to database in background...");
+        match sqlx::postgres::PgPoolOptions::new()
+            .max_connections(20)
+            .acquire_timeout(std::time::Duration::from_secs(30)) // Extra patience for Neon
+            .connect(&db_url)
+            .await 
+        {
+            Ok(db_pool) => {
+                info!("✅ Database connected. Starting migrations and background services.");
+                
+                // Initialize the OnceCell in state
+                let _ = background_state.db.set(db_pool.clone());
+                
+                // Cleanup corrupted migration record workaround
+                let _ = sqlx::query("DELETE FROM _sqlx_migrations WHERE version = 20260510163000")
+                    .execute(&db_pool).await;
 
-        match sqlx::migrate!("./migrations").run(&migration_pool).await {
-            Ok(_) => info!("✅ Database migrations completed successfully"),
-            Err(e) => tracing::error!("❌ Database migration error: {}", e),
-        }
-    });
-
-    // Start background services with their respective delays
-    let vpngate_pool = db_pool.clone();
-    tokio::spawn(async move {
-        tokio::time::sleep(std::time::Duration::from_secs(10)).await;
-        services::vpngate::start_vpngate_sync(vpngate_pool).await;
-    });
-
-    let pruning_pool = db_pool.clone();
-    tokio::spawn(async move {
-        tokio::time::sleep(std::time::Duration::from_secs(15)).await;
-        services::pruning::start_pruning_service(pruning_pool).await;
-    });
-
-    let vpnbook_pool = db_pool.clone();
-    tokio::spawn(async move {
-        tokio::time::sleep(std::time::Duration::from_secs(20)).await;
-        services::vpnbook::start_vpnbook_sync(vpnbook_pool).await;
-    });
-
-    let shadowsocks_pool = db_pool.clone();
-    tokio::spawn(async move {
-        tokio::time::sleep(std::time::Duration::from_secs(25)).await;
-        services::shadowsocks::start_shadowsocks_sync(shadowsocks_pool).await;
-    });
-
-    if use_tls {
-        info!("🔒 HTTPS/TLS mode enabled");
-        
-        let cert_path = std::env::var("TLS_CERT_PATH")
-            .unwrap_or_else(|_| "backend/server/cert.pem".to_string());
-        let key_path = std::env::var("TLS_KEY_PATH")
-            .unwrap_or_else(|_| "backend/server/key.pem".to_string());
-
-        info!("🎧 HTTPS API Server listening on https://{}", addr);
-
-        let cert_file = std::fs::File::open(&cert_path).expect("Failed to open cert");
-        let mut cert_reader = std::io::BufReader::new(cert_file);
-        let certs = rustls_pemfile::certs(&mut cert_reader).collect::<Result<Vec<_>, _>>().expect("Cert error");
-
-        let key_file = std::fs::File::open(&key_path).expect("Failed to open key");
-        let mut key_reader = std::io::BufReader::new(key_file);
-        let key = rustls_pemfile::private_key(&mut key_reader).expect("Key error").expect("No key");
-
-        let mut server_config = rustls::ServerConfig::builder()
-            .with_no_client_auth()
-            .with_single_cert(certs, key)
-            .expect("Invalid TLS");
-        server_config.alpn_protocols = vec![b"h2".to_vec(), b"http/1.1".to_vec()];
-
-        let tls_acceptor = tokio_rustls::TlsAcceptor::from(Arc::new(server_config));
-        let listener = tokio::net::TcpListener::bind(addr).await?;
-        
-        loop {
-            let (tcp_stream, remote_addr) = listener.accept().await?;
-            let tls_acceptor = tls_acceptor.clone();
-            let app = app.clone();
-
-            tokio::spawn(async move {
-                let tls_stream = match tls_acceptor.accept(tcp_stream).await {
-                    Ok(stream) => stream,
-                    Err(e) => {
-                        tracing::error!("TLS handshake error from {}: {}", remote_addr, e);
-                        return;
-                    }
-                };
-
-                if let Err(e) = hyper::server::conn::http1::Builder::new()
-                    .serve_connection(
-                        hyper_util::rt::TokioIo::new(tls_stream),
-                        hyper::service::service_fn(move |req| {
-                            tower::ServiceExt::oneshot(app.clone(), req)
-                        })
-                    )
-                    .await
-                {
-                    tracing::error!("HTTPS connection error: {}", e);
+                // Run migrations
+                if let Err(e) = sqlx::migrate!("./migrations").run(&db_pool).await {
+                    tracing::error!("❌ Migration failed: {}", e);
+                } else {
+                    info!("✅ Migrations synced.");
                 }
-            });
+
+                // Background tasks
+                let p1 = db_pool.clone();
+                tokio::spawn(async move {
+                    tokio::time::sleep(std::time::Duration::from_secs(10)).await;
+                    services::vpngate::start_vpngate_sync(p1).await;
+                });
+
+                let p2 = db_pool.clone();
+                tokio::spawn(async move {
+                    tokio::time::sleep(std::time::Duration::from_secs(15)).await;
+                    services::pruning::start_pruning_service(p2).await;
+                });
+
+                let p3 = db_pool.clone();
+                tokio::spawn(async move {
+                    tokio::time::sleep(std::time::Duration::from_secs(20)).await;
+                    services::vpnbook::start_vpnbook_sync(p3).await;
+                });
+
+                let p4 = db_pool.clone();
+                tokio::spawn(async move {
+                    tokio::time::sleep(std::time::Duration::from_secs(25)).await;
+                    services::shadowsocks::start_shadowsocks_sync(p4).await;
+                });
+            }
+            Err(e) => tracing::error!("❌ Fatal DB connection error: {}", e),
         }
-    } else {
-        info!("⚠️  HTTP mode (unsecured) - Use USE_TLS=true for HTTPS");
-        info!("🎧 HTTP API Server listening on http://{}", addr);
-        
-        let listener = tokio::net::TcpListener::bind(addr).await?;
-        axum::serve(listener, app).await?;
-    }
+    });
+
+    // --- 5. RUN SERVER ---
+    info!("🎧 Web server listening on http://{}", addr);
+    axum::serve(listener, app).await?;
 
     Ok(())
 }

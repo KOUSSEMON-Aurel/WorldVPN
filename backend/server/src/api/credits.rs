@@ -31,7 +31,10 @@ pub async fn get_balance(
     State(state): State<AppState>,
     AuthUser(user): AuthUser,
 ) -> impl IntoResponse {
-    let pool = state.db.as_ref().expect("DB not initialized");
+    let pool = match state.db.get() {
+        Some(p) => p,
+        None => return (StatusCode::SERVICE_UNAVAILABLE, Json(json!({"error": "Service warming up, please retry in a few seconds"}))).into_response(),
+    };
 
     let row = sqlx::query("SELECT credits FROM users WHERE id = $1")
         .bind(&user.sub)
@@ -54,7 +57,10 @@ pub async fn get_history(
     State(state): State<AppState>,
     AuthUser(user): AuthUser,
 ) -> impl IntoResponse {
-    let pool = state.db.as_ref().expect("DB not initialized");
+    let pool = match state.db.get() {
+        Some(p) => p,
+        None => return (StatusCode::SERVICE_UNAVAILABLE, Json(json!({"error": "Service warming up, please retry in a few seconds"}))).into_response(),
+    };
 
     let rows = sqlx::query_as::<_, TransactionResponse>(
         "SELECT id, amount, transaction_type, description, created_at FROM credit_transactions WHERE user_id = $1 ORDER BY created_at DESC LIMIT 50"
@@ -76,7 +82,10 @@ pub async fn sync_traffic(
     AuthUser(user): AuthUser,
     Json(payload): Json<SyncTrafficRequest>,
 ) -> impl IntoResponse {
-    let pool = state.db.as_ref().expect("DB not initialized");
+    let pool = match state.db.get() {
+        Some(p) => p,
+        None => return (StatusCode::SERVICE_UNAVAILABLE, Json(json!({"error": "Service warming up, please retry in a few seconds"}))).into_response(),
+    };
     
     // Standard conversion factor: 1 MB = 1 Credit
     const BYTES_PER_CREDIT: i64 = 1_048_576;
@@ -154,7 +163,10 @@ pub async fn submit_receipt(
     State(state): State<AppState>,
     Json(payload): Json<SubmitReceiptRequest>,
 ) -> impl IntoResponse {
-    let pool = state.db.as_ref().expect("DB not initialized");
+    let pool = match state.db.get() {
+        Some(p) => p,
+        None => return (StatusCode::SERVICE_UNAVAILABLE, Json(json!({"error": "Service warming up, please retry in a few seconds"}))).into_response(),
+    };
     
     // 1. Verify Signature (Cryptographic Proof of Bandwidth)
     let identity = match crate::auth::get_identity_from_pubkey(&payload.consumer_pubkey) {
