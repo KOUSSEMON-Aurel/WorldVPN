@@ -29,6 +29,11 @@ pub struct ConnectResponse {
 }
 
 /// POST /vpn/connect - Connect to VPN via P2P node or fallback server
+pub async fn connect(
+    State(state): State<AppState>,
+    user: crate::auth::AuthUser,
+    Json(payload): Json<ConnectRequest>,
+) -> impl IntoResponse {
     let pool = match state.db.get() {
         Some(p) => p,
         None => return (StatusCode::SERVICE_UNAVAILABLE, Json(json!({"error": "Service warming up, please retry in a few seconds"}))).into_response(),

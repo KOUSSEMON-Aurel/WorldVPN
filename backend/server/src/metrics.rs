@@ -35,6 +35,4 @@ pub fn init_metrics_descriptions() {
     metrics::describe_gauge!(counters::NODES_ACTIVE, "Current number of active online nodes");
 }
 
-pub async fn start_metrics_server() {
-    // Obsolete - keeping for compatibility during refactoring if needed
-}
+// Metrics server is now integrated into the main port 3000 via Axum
