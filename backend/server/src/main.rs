@@ -44,29 +44,36 @@ async fn main() -> anyhow::Result<()> {
         .await
         .expect("Failed to run database migrations");
 
-    // Start background services
+    // Liveness probe on startup (BEFORE spawning heavy background workers)
+    info!("💓 Running initial DB health check...");
+    sqlx::query("SELECT 1").execute(&db_pool).await.expect("DB Health check failed");
+
+    // Start background services with an initial staggered delay
+    // This allows the web server to bind to port 3000 immediately without getting blocked
+    // by massive DB inserts (which exhausts the connection pool and CPU on free/shared tiers).
     let vpngate_pool = db_pool.clone();
     tokio::spawn(async move {
+        tokio::time::sleep(std::time::Duration::from_secs(10)).await;
         services::vpngate::start_vpngate_sync(vpngate_pool).await;
     });
 
     let pruning_pool = db_pool.clone();
     tokio::spawn(async move {
+        tokio::time::sleep(std::time::Duration::from_secs(15)).await;
         services::pruning::start_pruning_service(pruning_pool).await;
     });
 
     let vpnbook_pool = db_pool.clone();
     tokio::spawn(async move {
+        tokio::time::sleep(std::time::Duration::from_secs(20)).await;
         services::vpnbook::start_vpnbook_sync(vpnbook_pool).await;
     });
 
     let shadowsocks_pool = db_pool.clone();
     tokio::spawn(async move {
+        tokio::time::sleep(std::time::Duration::from_secs(25)).await;
         services::shadowsocks::start_shadowsocks_sync(shadowsocks_pool).await;
     });
-
-    // Liveness probe on startup
-    sqlx::query("SELECT 1").execute(&db_pool).await.expect("DB Health check failed");
 
     // Initialize global application state
     let state = AppState::new(Some(db_pool));
