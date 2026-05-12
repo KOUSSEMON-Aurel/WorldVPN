@@ -40,7 +40,10 @@ pub async fn register_node(
     AuthUser(user): AuthUser,
     Json(payload): Json<RegisterNodeRequest>,
 ) -> impl IntoResponse {
-    let pool = state.db.as_ref().expect("DB not initialized");
+    let pool = match state.db.get() {
+        Some(p) => p,
+        None => return (StatusCode::SERVICE_UNAVAILABLE, Json(json!({"error": "Service warming up, please retry in a few seconds"}))).into_response(),
+    };
     
     let node_id = uuid::Uuid::new_v4().to_string();
     let protocols_json = serde_json::to_string(&payload.protocols).unwrap_or("[]".to_string());
@@ -109,7 +112,10 @@ pub async fn discover_nodes(
     AuthUser(user): AuthUser,
     Query(params): Query<DiscoverQuery>,
 ) -> impl IntoResponse {
-    let pool = state.db.as_ref().expect("DB not initialized");
+    let pool = match state.db.get() {
+        Some(p) => p,
+        None => return (StatusCode::SERVICE_UNAVAILABLE, Json(json!({"error": "Service warming up, please retry in a few seconds"}))).into_response(),
+    };
     
     let limit = params.limit.unwrap_or(10).min(50);
     
@@ -201,7 +207,10 @@ pub async fn heartbeat(
     AuthUser(user): AuthUser,
     Json(payload): Json<HeartbeatRequest>,
 ) -> impl IntoResponse {
-    let pool = state.db.as_ref().expect("DB not initialized");
+    let pool = match state.db.get() {
+        Some(p) => p,
+        None => return (StatusCode::SERVICE_UNAVAILABLE, Json(json!({"error": "Service warming up, please retry in a few seconds"}))).into_response(),
+    };
 
     let result = sqlx::query(
         r#"UPDATE nodes 
@@ -247,7 +256,10 @@ pub async fn go_offline(
     State(state): State<AppState>,
     AuthUser(user): AuthUser,
 ) -> impl IntoResponse {
-    let pool = state.db.as_ref().expect("DB not initialized");
+    let pool = match state.db.get() {
+        Some(p) => p,
+        None => return (StatusCode::SERVICE_UNAVAILABLE, Json(json!({"error": "Service warming up, please retry in a few seconds"}))).into_response(),
+    };
 
     let _ = sqlx::query("UPDATE nodes SET is_online = FALSE WHERE user_id = $1")
         .bind(&user.sub)
@@ -265,7 +277,10 @@ pub async fn my_node(
     State(state): State<AppState>,
     AuthUser(user): AuthUser,
 ) -> impl IntoResponse {
-    let pool = state.db.as_ref().expect("DB not initialized");
+    let pool = match state.db.get() {
+        Some(p) => p,
+        None => return (StatusCode::SERVICE_UNAVAILABLE, Json(json!({"error": "Service warming up, please retry in a few seconds"}))).into_response(),
+    };
 
     let result = sqlx::query(
         r#"SELECT id, country_code, is_online, reputation_score, current_connections,
@@ -307,7 +322,10 @@ pub async fn my_node(
 pub async fn public_nodes(
     State(state): State<AppState>,
 ) -> impl IntoResponse {
-    let pool = state.db.as_ref().expect("DB not initialized");
+    let pool = match state.db.get() {
+        Some(p) => p,
+        None => return (StatusCode::SERVICE_UNAVAILABLE, Json(json!({"error": "Service warming up, please retry in a few seconds"}))).into_response(),
+    };
     
     let result = sqlx::query(
         r#"SELECT id, country_code, available_bandwidth_mbps, protocols, public_config_data

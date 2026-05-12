@@ -26,7 +26,10 @@ pub async fn get_active_sessions(
     State(state): State<AppState>,
     AuthUser(user): AuthUser,
 ) -> impl IntoResponse {
-    let pool = state.db.as_ref().expect("DB not initialized");
+    let pool = match state.db.get() {
+        Some(p) => p,
+        None => return (StatusCode::SERVICE_UNAVAILABLE, Json(json!({"error": "Service warming up, please retry in a few seconds"}))).into_response(),
+    };
 
     let result = sqlx::query(
         r#"SELECT ps.id, ps.client_country, ps.traffic_type, ps.bytes_transferred,
@@ -80,7 +83,10 @@ pub async fn get_session_history(
     AuthUser(user): AuthUser,
     Query(params): Query<HistoryQuery>,
 ) -> impl IntoResponse {
-    let pool = state.db.as_ref().expect("DB not initialized");
+    let pool = match state.db.get() {
+        Some(p) => p,
+        None => return (StatusCode::SERVICE_UNAVAILABLE, Json(json!({"error": "Service warming up, please retry in a few seconds"}))).into_response(),
+    };
     let days = params.days.unwrap_or(7).min(30);
 
     let result = sqlx::query(
@@ -139,7 +145,10 @@ pub async fn get_stats(
     State(state): State<AppState>,
     AuthUser(user): AuthUser,
 ) -> impl IntoResponse {
-    let pool = state.db.as_ref().expect("DB not initialized");
+    let pool = match state.db.get() {
+        Some(p) => p,
+        None => return (StatusCode::SERVICE_UNAVAILABLE, Json(json!({"error": "Service warming up, please retry in a few seconds"}))).into_response(),
+    };
 
     // Multiple queries for comprehensive stats
     let node_info = sqlx::query(

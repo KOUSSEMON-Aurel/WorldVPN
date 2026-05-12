@@ -4,7 +4,10 @@ use crate::state::AppState;
 use sqlx::Row;
 
 pub async fn get_vpnbook_password(State(state): State<AppState>) -> impl IntoResponse {
-    let pool = state.db.as_ref().expect("DB not initialized");
+    let pool = match state.db.get() {
+        Some(p) => p,
+        None => return (StatusCode::SERVICE_UNAVAILABLE, Json(json!({"error": "Service warming up, please retry in a few seconds"}))).into_response(),
+    };
     
     let row = sqlx::query(
         "SELECT value FROM public_provider_metadata WHERE provider_name = 'VPNBOOK' AND key = 'password' LIMIT 1"
