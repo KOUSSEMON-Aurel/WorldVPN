@@ -77,10 +77,6 @@ async fn main() -> anyhow::Result<()> {
                 // Initialize the OnceCell in state
                 let _ = background_state.db.set(db_pool.clone());
                 
-                // Cleanup corrupted migration record workaround
-                let _ = sqlx::query("DELETE FROM _sqlx_migrations WHERE version = 20260510163000")
-                    .execute(&db_pool).await;
-
                 // Run migrations
                 if let Err(e) = sqlx::migrate!("./migrations").run(&db_pool).await {
                     tracing::error!("❌ Migration failed: {}", e);
