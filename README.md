@@ -159,16 +159,6 @@ WorldVPN/
 
 ---
 
-## Roadmap
-
-- [x] **Phase 1**: Shared Rust core & WireGuard integration.
-- [x] **Phase 2**: Ed25519 Identity & libp2p Swarm discovery.
-- [x] **Phase 3**: Standalone OS Daemon & P2P Super-Node relaying.
-- [/] **Phase 4**: Anonymous Credit Migration & E2E Endpoint Encryption.
-- [ ] **Phase 5**: Multi-Protocol Tunneling & Core Stabilization.
-
----
-
 <div align="center">
 
 **WorldVPN** · Decentralized Privacy Infrastructure
