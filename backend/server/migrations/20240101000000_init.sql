@@ -1,3 +1,4 @@
+-- migrate:up
 -- Initial migration: users and sessions
 
 CREATE TABLE IF NOT EXISTS users (
@@ -18,3 +19,7 @@ CREATE TABLE IF NOT EXISTS sessions (
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     active BOOLEAN NOT NULL DEFAULT TRUE
 );
+
+-- migrate:down
+DROP TABLE IF EXISTS sessions;
+DROP TABLE IF EXISTS users;

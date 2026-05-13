@@ -1,3 +1,4 @@
+-- migrate:up
 -- Credit transaction history
 
 CREATE TABLE IF NOT EXISTS credit_transactions (
@@ -11,3 +12,6 @@ CREATE TABLE IF NOT EXISTS credit_transactions (
 
 -- Index for fast user lookup
 CREATE INDEX IF NOT EXISTS idx_credit_logs_user ON credit_transactions(user_id);
+
+-- migrate:down
+DROP TABLE IF EXISTS credit_transactions;

@@ -1,7 +1,8 @@
+-- migrate:up
 -- Add node type distinction and support for public gateways
-ALTER TABLE nodes ADD COLUMN node_group TEXT DEFAULT 'COMMUNITY';
-ALTER TABLE nodes ADD COLUMN is_public BOOLEAN DEFAULT FALSE;
-ALTER TABLE nodes ADD COLUMN public_config_data TEXT; -- Stores OVPN config or connection string
+ALTER TABLE nodes ADD COLUMN IF NOT EXISTS node_group TEXT DEFAULT 'COMMUNITY';
+ALTER TABLE nodes ADD COLUMN IF NOT EXISTS is_public BOOLEAN DEFAULT FALSE;
+ALTER TABLE nodes ADD COLUMN IF NOT EXISTS public_config_data TEXT; -- Stores OVPN config or connection string
 ALTER TABLE nodes ALTER COLUMN user_id DROP NOT NULL; -- Public nodes don't have a local owner
 
 -- Update existing nodes to be community nodes
@@ -18,3 +19,6 @@ CREATE TABLE IF NOT EXISTS public_provider_stats (
     total_nodes_found INTEGER,
     status TEXT
 );
+
+-- migrate:down
+DROP TABLE IF EXISTS public_provider_stats;
