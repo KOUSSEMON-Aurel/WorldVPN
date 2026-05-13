@@ -77,12 +77,7 @@ async fn main() -> anyhow::Result<()> {
                 // Initialize the OnceCell in state
                 let _ = background_state.db.set(db_pool.clone());
                 
-                // Run migrations
-                if let Err(e) = sqlx::migrate!("./migrations").run(&db_pool).await {
-                    tracing::error!("❌ Migration failed: {}", e);
-                } else {
-                    info!("✅ Migrations synced.");
-                }
+                info!("✅ Ready. Background services starting soon.");
 
                 // Background tasks - MASSIVE DELAY to ensure Render health check passes first
                 // On Render free tier, CPU is very limited at startup.
