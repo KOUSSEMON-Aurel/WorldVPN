@@ -107,7 +107,7 @@ class _WalletScreenState extends ConsumerState<WalletScreen> {
       margin: const EdgeInsets.only(bottom: 12),
       padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
-        color: Colors.white.withOpacity(0.05),
+        color: Colors.white.withValues(alpha: 0.05),
         borderRadius: BorderRadius.circular(16),
       ),
       child: Row(
@@ -116,8 +116,8 @@ class _WalletScreenState extends ConsumerState<WalletScreen> {
             padding: const EdgeInsets.all(8),
             decoration: BoxDecoration(
               color: isEarned
-                  ? Colors.green.withOpacity(0.2)
-                  : Colors.red.withOpacity(0.2),
+                  ? Colors.green.withValues(alpha: 0.2)
+                  : Colors.red.withValues(alpha: 0.2),
               borderRadius: BorderRadius.circular(8),
             ),
             child: Icon(
@@ -180,7 +180,7 @@ class _WalletScreenState extends ConsumerState<WalletScreen> {
                       color: Theme.of(context)
                           .colorScheme
                           .primary
-                          .withOpacity(0.3),
+                          .withValues(alpha: 0.3),
                       blurRadius: 20,
                       offset: const Offset(0, 10),
                     ),

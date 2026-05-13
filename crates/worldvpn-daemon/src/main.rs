@@ -102,9 +102,10 @@ async fn main() -> Result<()> {
     let discovery = Arc::new(PeerDiscovery::new().await?);
     
     // 3. Optional: Register with backend if sharing is enabled
+    let mut logged_in = false;
     if args.share {
         info!("P2P Sharing enabled. Registering with backend...");
-        let client = VpnApiClient::new(args.api_url);
+        let client = VpnApiClient::new(args.api_url.clone());
         
         // Handshake for registration
         let timestamp = chrono::Utc::now().timestamp().to_string();
@@ -117,7 +118,15 @@ async fn main() -> Result<()> {
         ).await {
             Ok(auth) => {
                 info!("Authenticated with backend as {}", auth.username);
+                logged_in = true;
                 
+                // Keep vpn-core/api/simple in sync
+                vpn_core::api::simple::set_auth_token(auth.token.clone());
+                vpn_core::api::simple::set_logged_user(auth.username.clone());
+                if let Ok(key_bytes) = identity.to_bytes() {
+                    vpn_core::api::simple::set_private_key(key_bytes.to_vec());
+                }
+
                 // Keep-alive heartbeat loop
                 let client_clone = client.clone();
                 let token = auth.token.clone();
@@ -149,6 +158,18 @@ async fn main() -> Result<()> {
             }
             Err(e) => error!("Failed to authenticate with backend: {}", e),
         }
+    } else {
+        // Client mode: anonymous login to enable matchmaking
+        info!("Client mode. Performing anonymous login...");
+        if let Ok(key_bytes) = identity.to_bytes() {
+            match vpn_core::api::simple::login_anonymously_async(key_bytes.to_vec()).await {
+                Ok(token) => {
+                    info!("Logged in anonymously. Token: {}...", &token[..8]);
+                    logged_in = true;
+                }
+                Err(e) => error!("Anonymous login failed: {}", e),
+            }
+        }
     }
 
     if args.super_node {
@@ -156,11 +177,21 @@ async fn main() -> Result<()> {
     }
     
     // Attempt local connection via API wrapper
-    info!("Starting hybrid VPN tunnel...");
-    if let Err(e) = vpn_core::api::simple::start_vpn_matchmaking("Shadowsocks".to_string(), args.country.clone(), "Free".to_string()) {
-        error!("Failed to start VPN tunnel: {}", e);
+    if logged_in {
+        info!("Starting hybrid VPN tunnel...");
+        vpn_core::api::simple::set_backend_url(args.api_url.clone());
+        
+        if let Err(e) = vpn_core::api::simple::start_vpn_matchmaking_async(
+            "Shadowsocks".to_string(), 
+            args.country.clone(), 
+            "Free".to_string()
+        ).await {
+            error!("Failed to start VPN tunnel: {}", e);
+        } else {
+            info!("VPN tunnel started successfully.");
+        }
     } else {
-        info!("VPN tunnel started successfully.");
+        warn!("VPN tunnel skipped (not authenticated).");
     }
 
     // 4. Local Reputation & Latency Monitoring (Phase 5)
