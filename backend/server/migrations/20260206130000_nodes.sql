@@ -1,3 +1,4 @@
+-- migrate:up
 -- Peer nodes registry for P2P VPN network
 CREATE TABLE IF NOT EXISTS nodes (
     id TEXT PRIMARY KEY,
@@ -66,3 +67,7 @@ CREATE INDEX IF NOT EXISTS idx_nodes_online ON nodes(is_online, country_code);
 CREATE INDEX IF NOT EXISTS idx_nodes_user ON nodes(user_id);
 CREATE INDEX IF NOT EXISTS idx_peer_sessions_active ON peer_sessions(is_active, node_id);
 CREATE INDEX IF NOT EXISTS idx_peer_sessions_node_owner ON peer_sessions(node_owner_id);
+
+-- migrate:down
+DROP TABLE IF EXISTS peer_sessions;
+DROP TABLE IF EXISTS nodes;
