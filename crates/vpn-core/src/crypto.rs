@@ -8,6 +8,10 @@ use zeroize::Zeroize;
 use ed25519_dalek::{SigningKey, Signer, VerifyingKey, pkcs8::DecodePrivateKey, pkcs8::EncodePrivateKey};
 use rand::rngs::OsRng;
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD as B64, Engine};
+use hkdf::Hkdf;
+use sha2::{Sha256, Digest};
+use chacha20poly1305::{XChaCha20Poly1305, Key, XNonce, aead::{Aead, KeyInit}};
+use x25519_dalek::{StaticSecret, PublicKey as XPublicKey, EphemeralSecret};
 
 /// Générateur de nombres aléatoires sécurisé
 pub struct CryptoRng {
@@ -175,11 +179,8 @@ impl IdentityKey {
 
     /// Chiffre une chaîne (endpoint) pour une identité cible
     pub fn encrypt_for_identity(text: &str, recipient_pubkey_hex: &str) -> Result<String> {
-        use x25519_dalek::{StaticSecret, PublicKey as XPublicKey};
-        use chacha20poly1305::{ChaCha20Poly1305, Key, Nonce, aead::{Aead, KeyInit}};
-
         // 1. Générer une paire de clés éphémère X25519
-        let ephemeral_secret = StaticSecret::random_from_rng(OsRng);
+        let ephemeral_secret = EphemeralSecret::random_from_rng(OsRng);
         let ephemeral_public = XPublicKey::from(&ephemeral_secret);
 
         // 2. Préparer la clé publique du destinataire (conversion Ed -> X)
@@ -188,14 +189,19 @@ impl IdentityKey {
 
         // 3. Diffie-Hellman pour le secret partagé
         let shared_secret = ephemeral_secret.diffie_hellman(&recipient_x_pub);
+
+        // 4. Dériver une clé de chiffrement via HKDF-SHA256 (PFS & Robustesse)
+        let hk = Hkdf::<Sha256>::new(None, shared_secret.as_bytes());
+        let mut derived_key = [0u8; 32];
+        hk.expand(b"worldvpn-xchacha20-v1", &mut derived_key)
+            .map_err(|_| VpnError::CryptoError("Échec expansion HKDF".into()))?;
+
+        let cipher_key = Key::from_slice(&derived_key);
+        let cipher = XChaCha20Poly1305::new(cipher_key);
         
-        // 4. Dériver une clé de chiffrement (HKDF simplifié ou utiliser les bytes directement si sur)
-        let cipher_key = Key::from_slice(shared_secret.as_bytes());
-        let cipher = ChaCha20Poly1305::new(cipher_key);
-        
-        // 5. Chiffrement
-        let nonce_bytes = CryptoRng::new().random_bytes::<12>()?;
-        let nonce = Nonce::from_slice(&nonce_bytes);
+        // 5. Chiffrement (Usage de XChaCha20 pour nonce 24-bytes sécurisé)
+        let nonce_bytes = CryptoRng::new().random_bytes::<24>()?;
+        let nonce = XNonce::from_slice(&nonce_bytes);
         
         let ciphertext = cipher.encrypt(nonce, text.as_bytes())
             .map_err(|_| VpnError::CryptoError("Échec chiffrement AEAD".into()))?;
@@ -210,33 +216,27 @@ impl IdentityKey {
 
     /// Déchiffre une chaîne pour cette identité
     pub fn decrypt_with_identity(&self, encrypted_b64: &str) -> Result<String> {
-        use x25519_dalek::{StaticSecret, PublicKey as XPublicKey};
-        use chacha20poly1305::{ChaCha20Poly1305, Key, Nonce, aead::{Aead, KeyInit}};
-        use sha2::Digest;
-
         let combined = B64.decode(encrypted_b64)
             .map_err(|_| VpnError::CryptoError("Base64 invalide".into()))?;
         
-        if combined.len() < 32 + 12 {
+        // Taille minimale: ephemeral_pub(32) + nonce(24) + tag(16)
+        if combined.len() < 32 + 24 + 16 {
             return Err(VpnError::CryptoError("Payload trop court".into()));
         }
 
         let ephemeral_pub_bytes: [u8; 32] = combined[..32].try_into().unwrap();
-        let nonce_bytes: [u8; 12] = combined[32..44].try_into().unwrap();
-        let ciphertext = &combined[44..];
+        let nonce_bytes: [u8; 24] = combined[32..56].try_into().unwrap();
+        let ciphertext = &combined[56..];
 
         // 1. Convertir la graine Ed25519 en scalaire X25519
-        // La conversion correcte : SHA-512(seed) → lower 32 bytes → clamp
-        // Cela correspond à la conversion de la clé publique via le point de Montgomery (en chiffrement).
         let sk = self.signing_key.as_ref()
             .ok_or_else(|| VpnError::CryptoError("Clé privée indisponible".into()))?;
 
-        let seed = sk.to_bytes(); // 32 bytes — la graine Ed25519 brute
+        let seed = sk.to_bytes();
         let hash = sha2::Sha512::digest(&seed);
 
         let mut scalar_bytes = [0u8; 32];
         scalar_bytes.copy_from_slice(&hash[..32]);
-        // Appliquer le clamping X25519 (RFC 7748)
         scalar_bytes[0]  &= 248;
         scalar_bytes[31] &= 127;
         scalar_bytes[31] |= 64;
@@ -247,10 +247,16 @@ impl IdentityKey {
         let ephemeral_x_pub = XPublicKey::from(ephemeral_pub_bytes);
         let shared_secret = my_x_secret.diffie_hellman(&ephemeral_x_pub);
 
-        // 3. Déchiffrement
-        let cipher_key = Key::from_slice(shared_secret.as_bytes());
-        let cipher = ChaCha20Poly1305::new(cipher_key);
-        let nonce = Nonce::from_slice(&nonce_bytes);
+        // 3. Dérivation via HKDF (doit matcher encrypt_for_identity)
+        let hk = Hkdf::<Sha256>::new(None, shared_secret.as_bytes());
+        let mut derived_key = [0u8; 32];
+        hk.expand(b"worldvpn-xchacha20-v1", &mut derived_key)
+            .map_err(|_| VpnError::CryptoError("Échec expansion HKDF".into()))?;
+
+        // 4. Déchiffrement
+        let cipher_key = Key::from_slice(&derived_key);
+        let cipher = XChaCha20Poly1305::new(cipher_key);
+        let nonce = XNonce::from_slice(&nonce_bytes);
 
         let plaintext = cipher.decrypt(nonce, ciphertext)
             .map_err(|_| VpnError::CryptoError("Déchiffrement échoué (clé invalide?)".into()))?;

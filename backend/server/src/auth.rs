@@ -33,7 +33,8 @@ impl Claims {
 
 /// Signs a new JWT for the given user
 pub fn create_jwt(user_id: String, username: String) -> Result<String, jsonwebtoken::errors::Error> {
-    let secret = std::env::var("JWT_SECRET").unwrap_or_else(|_| "default_secret".to_string());
+    let secret = std::env::var("JWT_SECRET")
+        .expect("JWT_SECRET must be set in environment (min 32 chars recommended)");
     let claims = Claims::new(user_id, username);
     encode(
         &Header::default(),
@@ -44,7 +45,8 @@ pub fn create_jwt(user_id: String, username: String) -> Result<String, jsonwebto
 
 /// Validates and decodes a base64 encoded JWT string
 pub fn verify_jwt(token: &str) -> Result<Claims, jsonwebtoken::errors::Error> {
-    let secret = std::env::var("JWT_SECRET").unwrap_or_else(|_| "default_secret".to_string());
+    let secret = std::env::var("JWT_SECRET")
+        .expect("JWT_SECRET must be set in environment (min 32 chars recommended)");
     let validation = Validation::default();
     let token_data = decode::<Claims>(
         token,
@@ -108,3 +110,18 @@ pub fn get_identity_from_pubkey(pubkey_hex: &str) -> Result<vpn_core::crypto::Id
     vpn_core::crypto::IdentityKey::from_pubkey_hex(pubkey_hex)
         .map_err(|e| e.to_string())
 }
+
+/// Thread-safe store for authentication nonces to prevent replay attacks
+pub struct NonceStore {
+    /// nonce -> (timestamp_creation, public_key_expected)
+    pub nonces: std::sync::Mutex<std::collections::HashMap<String, (i64, String)>>,
+}
+
+impl NonceStore {
+    pub fn new() -> Self {
+        Self {
+            nonces: std::sync::Mutex::new(std::collections::HashMap::new()),
+        }
+    }
+}
+

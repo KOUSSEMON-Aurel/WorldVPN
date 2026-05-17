@@ -102,11 +102,35 @@ pub async fn login(
     }
 }
 
+#[derive(Serialize)]
+pub struct ChallengeResponse {
+    pub nonce: String,
+}
+
+/// GET /auth/challenge
+/// Generates a unique nonce for identity-based login
+pub async fn get_challenge(
+    State(state): State<AppState>,
+) -> impl IntoResponse {
+    let nonce = uuid::Uuid::new_v4().to_string();
+    let now = chrono::Utc::now().timestamp();
+    
+    let mut store = state.nonce_store.nonces.lock().unwrap();
+    // Safety: limit total pending nonces to prevent OOM
+    if store.len() > 10000 {
+        return (StatusCode::TOO_MANY_REQUESTS, Json(json!({"error": "Too many pending challenges"}))).into_response();
+    }
+    
+    store.insert(nonce.clone(), (now, String::new()));
+    
+    (StatusCode::OK, Json(ChallengeResponse { nonce })).into_response()
+}
+
 #[derive(Deserialize)]
 pub struct IdentityLoginRequest {
     pub public_key: String,
     pub signature: String,
-    pub timestamp: String,
+    pub nonce: String, // Replaced timestamp with nonce
 }
 
 /// POST /auth/identity
@@ -119,24 +143,26 @@ pub async fn identity_login(
         None => return (StatusCode::SERVICE_UNAVAILABLE, Json(json!({"error": "Service warming up, please retry in a few seconds"}))).into_response(),
     };
 
-    // 1. Vérification de la signature
-    use vpn_core::crypto::IdentityKey;
-    if !IdentityKey::verify_signature_from_hex(&payload.public_key, &payload.timestamp, &payload.signature) {
+    // 1. Vérification du nonce (Anti-replay)
+    let nonce_valid = {
+        let mut store = state.nonce_store.nonces.lock().unwrap();
+        if let Some((created_at, _)) = store.remove(&payload.nonce) {
+            // Nonce valide pendant 2 minutes seulement
+            (chrono::Utc::now().timestamp() - created_at) < 120
+        } else {
+            false
+        }
+    };
+
+    if !nonce_valid {
+        return (StatusCode::UNAUTHORIZED, Json(json!({"error": "Invalid or expired nonce"}))).into_response();
+    }
+
+    // 2. Vérification de la signature
+    if !vpn_core::crypto::IdentityKey::verify_signature_from_hex(&payload.public_key, &payload.nonce, &payload.signature) {
         return (
             StatusCode::UNAUTHORIZED,
             Json(json!({"error": "Invalid signature"})),
-        )
-            .into_response();
-    }
-
-    // 2. Vérification de la fraîcheur du timestamp (anti-replay)
-    // On accepte une fenêtre de 5 minutes
-    let ts: i64 = payload.timestamp.parse().unwrap_or(0);
-    let now = chrono::Utc::now().timestamp();
-    if (now - ts).abs() > 300 {
-        return (
-            StatusCode::UNAUTHORIZED,
-            Json(json!({"error": "Challenge expired or invalid timestamp"})),
         )
             .into_response();
     }

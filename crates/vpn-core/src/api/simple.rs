@@ -92,12 +92,14 @@ pub async fn login_anonymously_async(private_key_bytes: Vec<u8>) -> anyhow::Resu
         *key_guard = Some(private_key_bytes.clone());
     }
 
-    // Create challenge payload
-    let timestamp = chrono::Utc::now().timestamp().to_string();
-    let signature = identity.sign_challenge(&timestamp);
-
     let client = VpnApiClient::new(get_backend_url());
-    let response = client.login_with_identity(public_key.clone(), signature, timestamp).await?;
+
+    // 1. Fetch challenge (nonce)
+    let nonce = client.fetch_challenge().await?;
+    let signature = identity.sign_challenge(&nonce);
+
+    // 2. Perform identity login
+    let response = client.login_with_identity(public_key.clone(), signature, nonce).await?;
     
     if let Ok(mut token_guard) = AUTH_TOKEN.lock() {
         *token_guard = Some(response.token.clone());

@@ -38,6 +38,17 @@ async fn main() -> anyhow::Result<()> {
     // Start with None for DB, it will be populated asynchronously.
     let state = AppState::new(metrics_handle);
 
+    // --- 3.1 NONCE CLEANUP SERVICE ---
+    let cleanup_state = state.clone();
+    tokio::spawn(async move {
+        loop {
+            tokio::time::sleep(std::time::Duration::from_secs(60)).await;
+            let cutoff = chrono::Utc::now().timestamp() - 120; // 2 minutes expiry
+            let mut store = cleanup_state.nonce_store.nonces.lock().unwrap();
+            store.retain(|_, (ts, _)| *ts > cutoff);
+        }
+    });
+
     // Rate limiter
     let governor_config = Arc::new(
         GovernorConfigBuilder::default()

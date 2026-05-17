@@ -23,6 +23,7 @@ pub fn router(state: AppState) -> Router {
         .route("/nodes/vpnbook/password", get(vpnbook::get_vpnbook_password))
         
         // Authentication
+        .route("/auth/challenge", get(auth::get_challenge))
         .route("/auth/login", post(auth::login))
         .route("/auth/identity", post(auth::identity_login))
         .route("/auth/migrate", post(auth::migrate_credits))

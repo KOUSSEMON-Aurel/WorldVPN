@@ -88,6 +88,16 @@ async fn main() -> Result<()> {
             let bytes = id.to_bytes()?;
             std::fs::create_dir_all(path.parent().unwrap_or(&PathBuf::from(".")))?;
             std::fs::write(&path, &*bytes)?;
+
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                let metadata = path.metadata()?;
+                let mut permissions = metadata.permissions();
+                permissions.set_mode(0o600); // Strict: owner read/write only
+                std::fs::set_permissions(&path, permissions)?;
+                info!("Set strict permissions (0600) on identity file.");
+            }
             id
         }
     } else {
@@ -107,14 +117,20 @@ async fn main() -> Result<()> {
         info!("P2P Sharing enabled. Registering with backend...");
         let client = VpnApiClient::new(args.api_url.clone());
         
-        // Handshake for registration
-        let timestamp = chrono::Utc::now().timestamp().to_string();
-        let signature = identity.sign_challenge(&timestamp);
+        // Handshake for registration: Fetch server nonce (anti-replay)
+        let nonce = match client.fetch_challenge().await {
+            Ok(n) => n,
+            Err(e) => {
+                error!("Failed to fetch auth challenge: {}", e);
+                return Err(e.into());
+            }
+        };
+        let signature = identity.sign_challenge(&nonce);
         
         match client.login_with_identity(
             identity.public_key_hex(),
             signature,
-            timestamp
+            nonce
         ).await {
             Ok(auth) => {
                 info!("Authenticated with backend as {}", auth.username);

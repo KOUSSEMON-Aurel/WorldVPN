@@ -57,14 +57,28 @@ impl VpnApiClient {
         &self.base_url
     }
 
-    /// Login anonyme (V2) via clé publique Ed25519 et signature (Proof of Work/Identity)
-    pub async fn login_with_identity(&self, public_key: String, signature: String, timestamp: String) -> Result<LoginResponse> {
+    /// Récupère un nonce frais pour le login Identity
+    pub async fn fetch_challenge(&self) -> Result<String> {
+        let url = format!("{}/auth/challenge", self.base_url);
+        let resp = self.client.get(&url).send().await
+            .map_err(|e| VpnError::ConnectionFailed(format!("Challenge fetch failed: {}", e)))?;
+        
+        let data: serde_json::Value = resp.json().await
+            .map_err(|e| VpnError::Internal(format!("Invalid challenge response: {}", e)))?;
+        
+        data["nonce"].as_str()
+            .map(|s| s.to_string())
+            .ok_or_else(|| VpnError::Internal("Missing nonce in challenge response".into()))
+    }
+
+    /// Login anonyme (V2) via clé publique Ed25519 et signature d'un nonce serveur
+    pub async fn login_with_identity(&self, public_key: String, signature: String, nonce: String) -> Result<LoginResponse> {
         let url = format!("{}/auth/identity", self.base_url);
         
         let payload = serde_json::json!({
             "public_key": public_key,
             "signature": signature,
-            "timestamp": timestamp,
+            "nonce": nonce,
         });
 
         let response = self.client

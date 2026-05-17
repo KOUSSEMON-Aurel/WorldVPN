@@ -144,7 +144,8 @@ pub async fn connect(
             Some("ServerPublicKey_BASE64_PLACEHOLDER".to_string())
         }
         VpnProtocol::Shadowsocks => {
-            Some("chacha20-ietf-poly1305:worldvpn-secure-password".to_string())
+            let session_password = uuid::Uuid::new_v4().to_string().replace("-", "");
+            Some(format!("chacha20-ietf-poly1305:{}", session_password))
         }
         _ => None,
     };
@@ -240,9 +241,9 @@ pub async fn disconnect(
     let _ = sqlx::query(
         r#"UPDATE peer_sessions 
            SET is_active = FALSE, ended_at = CURRENT_TIMESTAMP
-           WHERE client_id_hash LIKE $1 AND is_active = TRUE"#
+           WHERE client_id_hash = $1 AND is_active = TRUE"#
     )
-    .bind(format!("hash_{}%", &user.0.sub[..8]))
+    .bind(format!("hash_{}", &user.0.sub[..8]))
     .execute(pool)
     .await;
 

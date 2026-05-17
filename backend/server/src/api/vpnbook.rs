@@ -3,7 +3,10 @@ use serde_json::json;
 use crate::state::AppState;
 use sqlx::Row;
 
-pub async fn get_vpnbook_password(State(state): State<AppState>) -> impl IntoResponse {
+pub async fn get_vpnbook_password(
+    _user: crate::auth::AuthUser,
+    State(state): State<AppState>,
+) -> impl IntoResponse {
     let pool = match state.db.get() {
         Some(p) => p,
         None => return (StatusCode::SERVICE_UNAVAILABLE, Json(json!({"error": "Service warming up, please retry in a few seconds"}))).into_response(),
